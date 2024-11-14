@@ -32,7 +32,6 @@
 
 #define SIPC_SBUF_HEAD_RESERV 4
 #define SIPC_SBLOCK_HEAD_RESERV 0
-#define WCN_SIPC_DBG
 
 #define mbuf_list_iter(head, num, pos, posn) \
 	for (pos = head, posn = 0; posn < num && pos; posn++, pos = pos->next)
@@ -130,11 +129,10 @@ struct sipc_chn_info {
 
 int wcn_sipc_channel_dir(int index);
 struct sipc_chn_info *wcn_sipc_channel_get(int index);
-void wcn_sipc_chn_set_status_all_false(void);
 
 #ifdef WCN_SIPC_DBG
 #define WCN_HERE WCN_INFO("[%s] %d\n", __func__, __LINE__)
-#define WCN_HERE_CHN(x) if(x==16) WCN_INFO("[%s] %d chn[%d]\n", __func__, __LINE__, x)
+#define WCN_HERE_CHN(x) WCN_INFO("[%s] %d chn[%d]\n", __func__, __LINE__, x)
 #else
 #define WCN_HERE
 #define WCN_HERE_CHN(x)

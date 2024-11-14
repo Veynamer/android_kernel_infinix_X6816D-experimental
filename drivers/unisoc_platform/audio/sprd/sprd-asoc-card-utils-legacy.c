@@ -94,10 +94,12 @@ static int board_ext_hook(int func_id, int on)
 		return -EINVAL;
 	}
 
-	sp_asoc_pr_dbg("function id(%d), on=%d\n",
+	sp_asoc_pr_info("function id(%d), on=%d\n",
 		       func_id, on);
-	if (ext_hook)
+	if (ext_hook) {
+		sp_asoc_pr_info("function id(%d), on=%d， func=%p(0x%x)\n", func_id, on, ext_hook->ext_ctrl[func_id], ext_hook->ext_ctrl[func_id]);
 		ret = SAFE_CALL(ext_hook->ext_ctrl[func_id], func_id, on);
+	}
 
 	return ret;
 }

@@ -560,12 +560,6 @@ static inline int hwdvfs_mpll_write(unsigned int cluster,
 				    unsigned long hz_freq)
 {
 	unsigned int reg = REG_ANLG_PHY_G4_ANALOG_MPLL_THM_TOP_MPLL0_DVFS_0;
-	unsigned int clu;
-
-	clu = cluster == HWDVFS_CHNL02 ? HWDVFS_CHNL_MAX : cluster;
-
-	if (cpufreq_datas[clu]->optimize_judge)
-		hz_freq -= 50000000UL;
 
 	reg = reg + (cluster * MPLL_HW_DVFS_EACH_NUM + idx_freq) * 0x4;
 

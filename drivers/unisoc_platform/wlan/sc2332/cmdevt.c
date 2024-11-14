@@ -1012,8 +1012,14 @@ static int cmdevt_set_ie(struct sprd_priv *priv, struct sprd_vif *vif, u8 type,
 {
 	struct sprd_msg *msg;
 	struct cmd_set_ie *p;
+	size_t datalen = sizeof(*p) + len;
 
-	msg = get_cmdbuf(priv, vif, sizeof(*p) + len, CMD_SET_IE);
+	if (datalen > 0xFFFF) {
+		pr_err("%s err datalen %zu.\n", __func__, datalen);
+		return -EINVAL;
+	}
+
+	msg = get_cmdbuf(priv, vif, (u16)datalen, CMD_SET_IE);
 	if (!msg)
 		return -ENOMEM;
 
@@ -1325,9 +1331,14 @@ int sc2332_tx_mgmt(struct sprd_priv *priv, struct sprd_vif *vif, u8 channel,
 {
 	struct sprd_msg *msg;
 	struct cmd_mgmt_tx *p;
-	u16 datalen = sizeof(*p) + len;
+	size_t datalen = sizeof(*p) + len;
 
-	msg = get_cmdbuf(priv, vif, datalen, CMD_TX_MGMT);
+	if (datalen > 0xFFFF) {
+		pr_err("%s err datalen %zu.\n", __func__, datalen);
+		return -EINVAL;
+	}
+
+	msg = get_cmdbuf(priv, vif, (u16)datalen, CMD_TX_MGMT);
 	if (!msg)
 		return -ENOMEM;
 	p = (struct cmd_mgmt_tx *)msg->data;

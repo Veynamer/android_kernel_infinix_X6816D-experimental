@@ -15,7 +15,9 @@
 #include <linux/platform_device.h>
 #include <linux/reboot.h>
 #include <linux/spi/spi.h>
+#include <linux/spi/spi_sprd_adi.h>
 #include <linux/sizes.h>
+
 
 /* Registers definitions for ADI controller */
 #define REG_ADI_CTRL0			0x4
@@ -121,6 +123,7 @@
 
 /* Definition of PMIC reset status register */
 #define HWRST_STATUS_SECURITY		0x02
+#define HWRST_STATUS_SML_PANIC		0x04
 #define HWRST_STATUS_RECOVERY		0x20
 #define HWRST_STATUS_NORMAL		0x40
 #define HWRST_STATUS_ALARM		0x50
@@ -132,6 +135,7 @@
 #define HWRST_STATUS_AUTODLOADER	0xa0
 #define HWRST_STATUS_IQMODE		0xb0
 #define HWRST_STATUS_SPRDISK		0xc0
+#define HWRST_STATUS_SILENT             0xd0
 #define HWRST_STATUS_FACTORYTEST	0xe0
 #define HWRST_STATUS_WATCHDOG		0xf0
 
@@ -139,9 +143,10 @@
 #define WDG_LOAD_VAL			((50 * 32768) / 1000)
 #define WDG_LOAD_MASK			GENMASK(15, 0)
 #define WDG_UNLOCK_KEY			0xe551
-//Modified by yangyunhai@sagereal.com for NVA-499  2022-09-07 begin
-#define HWRST_STATUS_SECBOOT	  	0x03//dm-verity error
-//Modified by yangyunhai@sagereal.com for NVA-499 2022-09-07 end
+
+/*Adi single soft multi hard*/
+#define SPRD_ADI_MAGIC_LEN_MAX          5
+
 struct sprd_adi_variant_data {
 	int (*read_check)(u32 val, u32 reg_paddr);
 	int (*write_wait)(void __iomem *adi_base);
@@ -163,7 +168,17 @@ struct sprd_adi {
 	unsigned long		slave_pbase;
 	struct notifier_block	restart_handler;
 	const struct sprd_adi_variant_data *data;
+	void (*panic_callback)(void);
 };
+
+struct sprd_adi *g_sadi;
+
+void sprd_adi_panic_prepare_register(void *callback)
+{
+	if (g_sadi != NULL)
+		g_sadi->panic_callback = callback;
+}
+EXPORT_SYMBOL(sprd_adi_panic_prepare_register);
 
 static int sprd_adi_check_paddr(struct sprd_adi *sadi, u32 paddr)
 {
@@ -420,7 +435,7 @@ static int sprd_adi_restart_handler(struct notifier_block *this,
 {
 	struct sprd_adi *sadi = container_of(this, struct sprd_adi,
 					     restart_handler);
-	u32 val = 0, reboot_mode = 0;
+	u32 val = 0, reboot_mode = 0, sml_mode;
 
 	if (!cmd)
 		reboot_mode = HWRST_STATUS_NORMAL;
@@ -432,9 +447,11 @@ static int sprd_adi_restart_handler(struct notifier_block *this,
 		reboot_mode = HWRST_STATUS_SLEEP;
 	else if (!strncmp(cmd, "bootloader", 10))
 		reboot_mode = HWRST_STATUS_FASTBOOT;
-	else if (!strncmp(cmd, "panic", 5))
+	else if (!strncmp(cmd, "panic", 5)) {
+		if (sadi->panic_callback != NULL)
+			sadi->panic_callback();
 		reboot_mode = HWRST_STATUS_PANIC;
-	else if (!strncmp(cmd, "special", 7))
+	} else if (!strncmp(cmd, "special", 7))
 		reboot_mode = HWRST_STATUS_SPECIAL;
 	else if (!strncmp(cmd, "cftreboot", 9))
 		reboot_mode = HWRST_STATUS_CFTREBOOT;
@@ -448,18 +465,19 @@ static int sprd_adi_restart_handler(struct notifier_block *this,
 		reboot_mode = HWRST_STATUS_SECURITY;
 	else if (!strncmp(cmd, "factorytest", 11))
 		reboot_mode = HWRST_STATUS_FACTORYTEST;
-//Modified by yangyunhai@sagereal.com for NVA-499  2022-09-07 begin
-	else if (!strncmp(cmd, "dm-verity", 9))
-		reboot_mode = HWRST_STATUS_SECBOOT;
-//Modified by yangyunhai@sagereal.com for NVA-499  2022-09-07 end
+	else if (!strncmp(cmd, "silent", 6))
+		reboot_mode = HWRST_STATUS_SILENT;
 	else
 		reboot_mode = HWRST_STATUS_NORMAL;
 
 	/* Record the reboot mode */
 	sprd_adi_read(sadi, sadi->slave_pbase + sadi->data->rst_sts, &val);
-	val &= ~HWRST_STATUS_WATCHDOG;
-	val |= reboot_mode;
-	sprd_adi_write(sadi, sadi->slave_pbase + sadi->data->rst_sts, val);
+	sml_mode = val & 0xFF;
+	if (sml_mode != HWRST_STATUS_SML_PANIC && sml_mode != HWRST_STATUS_SECURITY) {
+		val &= ~0xFF;
+		val |= reboot_mode;
+		sprd_adi_write(sadi, sadi->slave_pbase + sadi->data->rst_sts, val);
+	}
 
 	/*enable register reboot mode*/
 	sprd_adi_read(sadi, sadi->slave_pbase + sadi->data->swrst_base, &val);
@@ -477,12 +495,41 @@ static int sprd_adi_restart_handler(struct notifier_block *this,
 	return NOTIFY_DONE;
 }
 
+static void sprd_adi_power_ssmh(char *adi_supply)
+{
+	struct device_node *cmdline_node;
+	const char *cmd_line, *adi_type;
+	char adi_value[SPRD_ADI_MAGIC_LEN_MAX] = "";
+	int ret;
+
+	cmdline_node = of_find_node_by_path("/chosen");
+	ret = of_property_read_string(cmdline_node, "bootargs", &cmd_line);
+
+	if (ret) {
+		pr_err("can't parse bootargs property\n");
+		return;
+	}
+
+	adi_type = strstr(cmd_line, "power.from.extern=");
+	if (!adi_type) {
+		pr_err("can't find power.from.extern\n");
+		return;
+	}
+
+	sscanf(adi_type, "power.from.extern=%s", &adi_value);
+	if (!adi_value[0])
+		return;
+
+	strcat(adi_supply, adi_value);
+}
+
 static void sprd_adi_hw_init(struct sprd_adi *sadi)
 {
 	struct device_node *np = sadi->dev->of_node;
 	int i, size, chn_cnt;
 	const __be32 *list;
 	u32 tmp;
+	char adi_supply[25] = "sprd,hw-channels";
 
 	/* Set all channels as default priority */
 	writel_relaxed(0, sadi->base + REG_ADI_CHN_PRIL);
@@ -494,7 +541,10 @@ static void sprd_adi_hw_init(struct sprd_adi *sadi)
 	writel_relaxed(tmp, sadi->base + REG_ADI_GSSI_CFG0);
 
 	/* Set hardware channels setting */
-	list = of_get_property(np, "sprd,hw-channels", &size);
+	sprd_adi_power_ssmh(adi_supply);
+	dev_info(sadi->dev, "adi supply is %s\n", adi_supply);
+
+	list = of_get_property(np, adi_supply, &size);
 	if (!list || !size) {
 		dev_info(sadi->dev, "no hw channels setting in node\n");
 		return;
@@ -568,6 +618,7 @@ static int sprd_adi_probe(struct platform_device *pdev)
 	sadi->slave_pbase = res->start + data->channel_offset;
 	sadi->ctlr = ctlr;
 	sadi->dev = &pdev->dev;
+	sadi->panic_callback = NULL;
 	sadi->data = data;
 	ret = of_hwspin_lock_get_id(np, 0);
 	if (ret > 0 || (IS_ENABLED(CONFIG_HWSPINLOCK) && ret == 0)) {
@@ -615,6 +666,7 @@ static int sprd_adi_probe(struct platform_device *pdev)
 		goto put_ctlr;
 	}
 
+	g_sadi = sadi;
 	return 0;
 
 put_ctlr:

@@ -14,6 +14,7 @@
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_modes.h>
 #include <drm/drm_panel.h>
+#include <linux/hardware_info.h>
 
 enum {
 	CMD_CODE_INIT = 0,
@@ -28,6 +29,12 @@ enum {
 	CMD_CODE_RESERVED3,
 	CMD_CODE_RESERVED4,
 	CMD_CODE_RESERVED5,
+	/* likaisheng@ODM.Multimedia.LCD  2021/02/20 add cabc func  start*/
+	CMD_CODE_CABC_OFF,
+	CMD_CODE_CABC_UI,
+	CMD_CODE_CABC_STILL_IMAGE,
+	CMD_CODE_CABC_VIDEO,
+	/* likaisheng@ODM.Multimedia.LCD  2021/02/20 add cabc func  end*/
 	CMD_CODE_MAX,
 };
 
@@ -42,6 +49,14 @@ enum {
 	ESD_MODE_REG_CHECK,
 	ESD_MODE_TE_CHECK,
 	ESD_MODE_MIX_CHECK,
+};
+
+/*add for lcd esd by licheng@huaqin.com 2021.11.23*/
+enum {
+        ESD_EVENT_TP_SUSPEND,
+        ESD_EVENT_TP_RESUME,
+		FTS_TP_RESET_0,
+		FTS_TP_RESET_1,
 };
 
 struct dsi_cmd_desc {
@@ -66,6 +81,7 @@ struct panel_info {
 	/* common parameters */
 	struct device_node *of_node;
 	struct drm_display_mode mode;
+	struct drm_display_mode curr_mode;
 	struct drm_display_mode *buildin_modes;
 	int num_buildin_modes;
 	struct gpio_desc *avdd_gpio;
@@ -90,13 +106,14 @@ struct panel_info {
 	u32 lp_rate;
 	u32 mode_flags;
 	bool use_dcs;
-//Added by qinjinke@sagereal.com for NVA-1119 custom hwinfo begin 2022-09-20
-#ifdef CONFIG_CUSTOM_HWINFO
-   const char *ic_name;
-   const char *vendor_name;
-   const char *ic_inch;
-#endif
-//Added by qinjinke@sagereal.com for NVA-1119 custom hwinfo end 2022-09-20
+	/* delay time between set lcd avdd and avee */
+	u32 power_on_avdd_delay;
+	u32 power_on_avee_delay;
+	u32 power_off_avdd_delay;
+	u32 power_off_avee_delay;
+	u32 last_brightness;
+	u32 backlight_first_delay;
+	u32 start_frame_rate_flag;
 };
 
 struct sprd_panel {
@@ -106,10 +123,15 @@ struct sprd_panel {
 	struct panel_info info;
 	char lcd_name[50];
 	struct backlight_device *backlight;
+	struct backlight_device *oled_bdev;
 	struct regulator *supply;
 	struct delayed_work esd_work;
 	bool esd_work_pending;
+	bool esd_work_backup;
 	struct mutex lock;
+#ifdef LCD_CONFIG_POWER_ESD_ON
+	struct notifier_block panic_nb;
+#endif
 	bool enabled;
 };
 
@@ -122,7 +144,17 @@ struct sprd_oled {
 	int max_level;
 };
 
+struct oplus_brightness_alpha {
+	u32 brightness;
+	u32 alpha;
+};
+
 int sprd_panel_parse_lcddtb(struct device_node *lcd_node,
 	struct sprd_panel *panel);
+
+/*add for lcd esd by licheng@huaqin.com 2021.11.23*/
+int esd_tp_reset_notifier_register(struct notifier_block *nb);
+int esd_tp_reset_notifier_unregister(struct notifier_block *nb);
+//extern int touch_black_test;
 
 #endif /* _SPRD_DSI_PANEL_H_ */

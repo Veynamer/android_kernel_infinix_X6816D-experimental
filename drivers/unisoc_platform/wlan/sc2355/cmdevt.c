@@ -10,6 +10,7 @@
 */
 
 #include <linux/completion.h>
+#include <linux/of_gpio.h>
 #include "cmdevt.h"
 #include "common/acs.h"
 #include "common/cfg80211.h"
@@ -29,7 +30,6 @@
 #include "rtt.h"
 #include "rx.h"
 #include "tx.h"
-
 #define ASSERT_INFO_BUF_SIZE	100
 
 #define SEC1			1
@@ -197,6 +197,26 @@ static const char *cmdevt_cmd2str(u8 cmd)
 	default:
 		return "CMD_UNKNOWN";
 	}
+}
+
+char *get_project_name5G(void)
+{
+	struct device_node *cmdline_node;
+	const char *cmd_line = 0;
+	char *temp_name = 0;
+	int ret = 0;
+	cmdline_node = of_find_node_by_path("/chosen");
+	ret = of_property_read_string(cmdline_node,"bootargs",&cmd_line);
+	if(!ret){
+		temp_name = strstr(cmd_line,"prj_name=");
+		if(temp_name != NULL){
+		temp_name += strlen("prj_name=");
+		pr_info("prj_name5G=%s\n",temp_name);
+	}else{
+		pr_err("read prj_name5G err");
+		}
+	}
+	return temp_name;
 }
 
 const char *sc2355_cmdevt_cmd2str(u8 cmd)
@@ -1335,6 +1355,7 @@ static void cmdevt_set_tlv_elmt(u8 *addr, u16 type, u16 len, u8 *data)
 int sc2355_get_fw_info(struct sprd_priv *priv)
 {
 	int ret;
+	char *prj_name = get_project_name5G();
 	struct sprd_msg *msg;
 	struct cmd_fw_info *p;
 	struct tlv_data *tlv;
@@ -1388,6 +1409,30 @@ int sc2355_get_fw_info(struct sprd_priv *priv)
 		priv->chip_ver = p->chip_version;
 		priv->fw_ver = p->fw_version;
 		priv->fw_capa = p->fw_capa;
+		if (prj_name != NULL && (strncmp(prj_name,"2171A",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"2171C",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"2171B",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"2171D",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"2171E",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"21724",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"2171F",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"21721",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"21722",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"21723",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else{
+		priv->fw_capa &= ~(1 << 0);
+		printk("[kernel] Shutdown 5GWIFI");
+		}
 		priv->fw_std = p->fw_std;
 		priv->extend_feature = p->extend_feature;
 		priv->max_ap_assoc_sta = p->max_ap_assoc_sta;
@@ -1750,8 +1795,14 @@ static int cmdevt_set_ie(struct sprd_priv *priv, struct sprd_vif *vif, u8 type,
 {
 	struct sprd_msg *msg;
 	struct cmd_set_ie *p;
+	size_t datalen = sizeof(*p) + len;
 
-	msg = get_cmdbuf(priv, vif, sizeof(*p) + len, CMD_SET_IE);
+	if (datalen > 0xFFFF) {
+		pr_err("%s err datalen %zu.\n", __func__, datalen);
+		return -EINVAL;
+	}
+
+	msg = get_cmdbuf(priv, vif, (u16)datalen, CMD_SET_IE);
 	if (!msg)
 		return -ENOMEM;
 
@@ -2068,9 +2119,14 @@ int sc2355_tx_mgmt(struct sprd_priv *priv, struct sprd_vif *vif, u8 channel,
 {
 	struct sprd_msg *msg;
 	struct cmd_mgmt_tx *p;
-	u16 datalen = sizeof(*p) + len;
+	size_t datalen = sizeof(*p) + len;
 
-	msg = get_cmdbuf(priv, vif, datalen, CMD_TX_MGMT);
+	if (datalen > 0xFFFF) {
+		pr_err("%s err datalen %zu.\n", __func__, datalen);
+		return -EINVAL;
+	}
+
+	msg = get_cmdbuf(priv, vif, (u16)datalen, CMD_TX_MGMT);
 	if (!msg)
 		return -ENOMEM;
 	p = (struct cmd_mgmt_tx *)msg->data;
@@ -2538,65 +2594,6 @@ int sprd_send_data2cmd(struct sprd_priv *priv, struct sprd_vif *vif, void *data,
 	return send_cmd_recv_rsp(priv, msg, NULL, NULL);
 }
 
-int sc2355_xmit_data2cmd(struct sk_buff *skb, struct net_device *ndev)
-{
-#define FLAG_SIZE  5
-	struct sprd_vif *vif = netdev_priv(ndev);
-	struct sprd_msg *msg;
-	u8 *temp_flag = "01234";
-	struct tx_msdu_dscr *dscr;
-	struct sprd_cmd *cmd = &vif->priv->cmd;
-
-	if (unlikely(atomic_read(&cmd->refcnt) > 0)) {
-		pr_err("%s, cmd->refcnt = %d, Try later again\n",
-		       __func__, atomic_read(&cmd->refcnt));
-		return -EAGAIN;
-	}
-
-	if (skb->protocol == cpu_to_be16(ETH_P_PAE)) {
-		u8 *data = (u8 *)(skb->data) + sizeof(struct ethhdr);
-		struct sprd_eap_hdr *eap = (struct sprd_eap_hdr *)data;
-
-		if (eap->type == EAP_PACKET_TYPE &&
-		    eap->opcode == EAP_WSC_DONE) {
-			pr_info("%s, EAP_WSC_DONE!\n", __func__);
-			vif->wps_flag = 1;
-		}
-	}
-
-	/*fill dscr header first*/
-	if (sc2355_hif_fill_msdu_dscr(vif, skb, SPRD_TYPE_CMD, 0)) {
-		dev_kfree_skb(skb);
-		return -EPERM;
-	}
-	/*alloc five byte for fw 16 byte need
-	 *dscr:11+flag:5 =16
-	 */
-	skb_push(skb, FLAG_SIZE);
-	memcpy(skb->data, temp_flag, FLAG_SIZE);
-	/*malloc msg buffer*/
-	msg = get_databuf(vif->priv, vif, skb->len, CMD_TX_DATA);
-	if (!msg) {
-		pr_err("%s, %d, fail to get msg, free skb\n",
-		       __func__, __LINE__);
-		dev_kfree_skb(skb);
-		return -ENOMEM;
-	}
-	/*send group in BK to avoid FW hang*/
-	dscr = (struct tx_msdu_dscr *)skb->data;
-	if ((vif->mode == SPRD_MODE_AP ||
-	     vif->mode == SPRD_MODE_P2P_GO) && dscr->sta_lut_index < 6) {
-		dscr->buffer_info.msdu_tid = prio_1;
-		pr_info("%s, %d, SOFTAP/GO group go as BK\n", __func__,
-			__LINE__);
-	}
-
-	memcpy(msg->data, skb->data, skb->len);
-	dev_kfree_skb(skb);
-
-	return cmdevt_send_cmd(vif->priv, msg);
-}
-
 int sprd_xmit_data2cmd_wq(struct sk_buff *skb, struct net_device *ndev)
 {
 #define FLAG_SIZE 5
@@ -2758,7 +2755,8 @@ int sc2355_set_miracast(struct net_device *ndev, struct ifreq *ifr)
 		return -EINVAL;
 
 	/*add length check to avoid invalid NULL ptr*/
-	if (priv_cmd.total_len == 0) {
+	if ((priv_cmd.total_len <= 0) ||
+		(priv_cmd.total_len > SPRD_MAX_CMD_TXLEN)) {
 		pr_err("%s: priv cmd total len is invalid", __func__);
 		return -EINVAL;
 	}
@@ -3665,9 +3663,11 @@ unsigned short sc2355_rx_evt_process(struct sprd_priv *priv, u8 *msg)
 		return plen;
 	}
 
-	pr_warn("[%u]ctx_id %d recv[%s]len: %d,rsp_cnt=%d\n",
-		le32_to_cpu(hdr->mstime), ctx_id,
-		cmdevt_evt2str(hdr->cmd_id), plen, hdr->rsp_cnt);
+	if (hdr->cmd_id != EVT_SDIO_FLOWCON) {
+		wl_info("[%u]ctx_id %d recv[%s]len: %d,rsp_cnt=%d\n",
+			le32_to_cpu(hdr->mstime), ctx_id,
+			cmdevt_evt2str(hdr->cmd_id), plen, hdr->rsp_cnt);
+	}
 
 	print_hex_dump_debug("EVENT: ", DUMP_PREFIX_OFFSET, 16, 1,
 			     (u8 *)hdr, hdr->plen, 0);

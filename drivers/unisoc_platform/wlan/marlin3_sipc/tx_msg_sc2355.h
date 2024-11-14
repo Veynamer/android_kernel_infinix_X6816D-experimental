@@ -30,6 +30,8 @@
 #define DHCP_CLIENT_PORT_IPV6 0x0222
 #define ETH_P_PREAUTH       0x88C7
 
+#define DNS_SERVER_PORT        0x0035
+
 #define VOWIFI_SIP_DSCP		0x1a
 #define VOWIFI_IKE_DSCP		0x30
 #define VOWIFI_VIDEO_DSCP	0x28
@@ -138,6 +140,5 @@ void tx_up(struct sprdwl_tx_msg *tx_msg);
 void sprdwl_dequeue_tofreelist_buf(struct sprdwl_tx_msg *tx_msg, struct sprdwl_msg_buf *msg_buf);
 void prepare_addba(struct sprdwl_intf *intf, unsigned char lut_index,
 		    struct sprdwl_peer_entry *peer_entry, unsigned char tid);
-int sprdwl_sc2355_reset(struct sprdwl_intf *intf);
 #endif
 

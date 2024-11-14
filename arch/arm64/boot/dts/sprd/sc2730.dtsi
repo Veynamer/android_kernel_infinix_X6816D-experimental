@@ -114,6 +114,10 @@
 			headset_adc_sec: calib@16 {
 				reg = <0x2c 0x2>;
 			};
+
+			codec_product_info: calib@2e {
+				reg = <0x2e 0x2>;
+			};
 		};
 
 		pmic_typec: typec@380 {
@@ -177,16 +181,24 @@
 			sprd,syscon-pmu-apb = <&pmu_apb_regs>;
 			nvmem-cells = <&aud_pabst_vcal>,
 				<&neg_cp_efuse>,
-				<&fgu_calib>;
+				<&fgu_calib>,
+				<&codec_product_info>;
 			nvmem-cell-names = "aud_pabst_vcal_efuse",
 					"neg_cp_efuse",
-					"fgu_4p2_efuse";
+					"fgu_4p2_efuse",
+					"codec_product_info";
 			status = "disabled";
 		};
 
 		syscon@1800 {
 			compatible = "sprd,sc2731-syscon", "sprd,sc27xx-syscon";
 			reg = <0x1800>, <0x1ba0>, <0x1b98>;
+		};
+
+		refout@1800 {
+			compatible = "sprd,sc27xx-refout";
+			regsw = <0x1AEC>;
+			refnum = <5>;
 		};
 
 		power-controller@1800 {
@@ -361,7 +373,7 @@
 
 			vddsdcore: LDO_VDDSDCORE {
 				regulator-name = "vddsdcore";
-				regulator-min-microvolt = <1200000>;
+				regulator-min-microvolt = <3000000>;
 				regulator-max-microvolt = <3750000>;
 				regulator-ramp-delay = <25000>;
 			};

@@ -37,7 +37,6 @@ enum {
 enum wcn_gnss_sub_sys {
 	WCN_GNSS = 16,
 	WCN_GNSS_BD,
-	WCN_GNSS_GAL,
 	WCN_GNSS_ALL,
 };
 /* gnss defined locally end*/

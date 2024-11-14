@@ -221,7 +221,7 @@ static void sc2355_reg_notify(struct wiphy *wiphy,
 				    reg_rule->dfs_cac_ms;
 				i++;
 
-				wiphy_dbg(wiphy,
+				wiphy_info(wiphy,
 					  "   %d KHz - %d KHz @ %d KHz flags %#x\n",
 					  freq_range->start_freq_khz,
 					  freq_range->end_freq_khz,
@@ -492,7 +492,7 @@ struct sprd_chip_ops sc2355_chip_ops = {
 	.set_mc_filter = sc2355_set_mc_filter,
 	.set_11v_feature_support = sc2355_set_11v_feature_support,
 	.set_11v_sleep_mode = sc2355_set_11v_sleep_mode,
-	.xmit_data2cmd = sc2355_xmit_data2cmd,
+	.xmit_data2cmd = sprd_xmit_data2cmd_wq,
 	.set_random_mac = sc2355_set_random_mac,
 	.set_max_clients_allowed = sc2355_set_max_clients_allowed,
 	.do_delay_work = sc2355_do_delay_work,

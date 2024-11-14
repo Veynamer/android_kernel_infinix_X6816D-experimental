@@ -670,6 +670,7 @@ static void __exit sprd_drm_exit(void)
 module_init(sprd_drm_init);
 module_exit(sprd_drm_exit);
 
+MODULE_SOFTDEP("pre: hardware_info");
 MODULE_AUTHOR("Leon He <leon.he@unisoc.com>");
 MODULE_AUTHOR("Kevin Tang <kevin.tang@unisoc.com>");
 MODULE_DESCRIPTION("Unisoc DRM KMS Master Driver");

@@ -18,8 +18,8 @@
 		sprd,half-adc-gnd = <100>;
 		sprd,coefficient = <884520>;
 		sprd,irq-threshold-button = <4>;
-		nvmem-cells = <&headset_adc_fir>, <&headset_adc_sec>;
-		nvmem-cell-names = "hp_adc_fir_calib", "hp_adc_sec_calib";
+		nvmem-cells = <&headset_adc_fir>, <&headset_adc_sec>, <&pdref_calib>, <&aud_pabst_vcal>, <&neg_cp_efuse>;
+		nvmem-cell-names = "hp_adc_fir_calib", "hp_adc_sec_calib", "aud_impd_cal2", "aud_impd_cal0", "aud_impd_cal1";
 
 		sprd,headset-button@0 {
 			/* media */

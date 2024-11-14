@@ -2350,6 +2350,17 @@ static int ana_loop_event(struct snd_soc_dapm_widget *w,
 	return ret;
 }
 
+static void sprd_codec_micbias_set(struct snd_soc_component *codec, int v_sel)
+{
+	int mask;
+	int val;
+
+	pr_info("micbias set %d\n", v_sel);
+	mask = MICBIAS_V_MASK << MICBIAS_V;
+	val = (v_sel << MICBIAS_V) & mask;
+	snd_soc_component_update_bits(codec, SOC_REG(ANA_PMU1), mask, val);
+}
+
 static int mic_bias_event(struct snd_soc_dapm_widget *w,
 			  struct snd_kcontrol *kcontrol, int event)
 {
@@ -2367,6 +2378,9 @@ static int mic_bias_event(struct snd_soc_dapm_widget *w,
 	switch (reg) {
 	case SPRD_CODEC_MIC_BIAS:
 		regu = &sprd_codec->main_mic;
+		if (on != 0) {
+			sprd_codec_micbias_set(codec, 0x4); /* 0x4 means 0b100, 2.7V */
+		}
 		break;
 	case SPRD_CODEC_HEADMIC_BIAS:
 		regu = &sprd_codec->head_mic;
@@ -3880,70 +3894,6 @@ static const struct soc_enum codec_info_enum =
 	SOC_SINGLE_EXT(xname, FUN_REG(xreg), 0, 1, 0, \
 		sprd_codec_switch_get, sprd_codec_switch_put)
 
-//Added by zhanggeyin for [NVA-707] Add Audio Auto Test feature Begin
-static int fixed_rate_get(struct snd_kcontrol *kcontrol,
-			      struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_soc_component *codec = snd_soc_kcontrol_component(kcontrol);
-	struct sprd_codec_priv *sprd_codec = snd_soc_component_get_drvdata(codec);
-
-
-    sp_asoc_pr_info("%s, %d %d %d\n",
-        __func__,
-        sprd_codec->fixed_sample_rate[CODEC_PATH_DA],
-        sprd_codec->fixed_sample_rate[CODEC_PATH_AD],
-        sprd_codec->fixed_sample_rate[CODEC_PATH_AD1]);
-
-	ucontrol->value.integer.value[0] =
-		sprd_codec->fixed_sample_rate[CODEC_PATH_DA];
-
-	return 0;
-}
-
-static int fixed_rate_put(struct snd_kcontrol *kcontrol,
-                   struct snd_ctl_elem_value *ucontrol)
-{
-
-    struct snd_soc_component *codec = snd_soc_kcontrol_component(kcontrol);
-    struct sprd_codec_priv *sprd_codec = snd_soc_component_get_drvdata(codec);
-    unsigned int val;
-    int mask = 0x0F;
-    int shift = 0;
-
-    val = (ucontrol->value.integer.value[0]);
-
-    sp_asoc_pr_info("%s, %d\n",
-        __func__, val);
-
-    sprd_codec->fixed_sample_rate[CODEC_PATH_DA] = val;
-    sprd_codec->fixed_sample_rate[CODEC_PATH_AD] = val;
-    sprd_codec->fixed_sample_rate[CODEC_PATH_AD1] = val;
-
-    if (0 != val) {
-        sprd_codec->da_sample_val = val;
-        sp_asoc_pr_info("fixed_rate_put Playback rate is [%u]\n",
-            sprd_codec->da_sample_val);
-        sprd_codec_set_sample_rate(codec,
-            sprd_codec->da_sample_val, mask, shift);
-
-        sprd_codec->ad_sample_val = val;
-        sprd_codec_set_ad_sample_rate(codec,
-            sprd_codec->ad_sample_val, mask, shift);
-        sp_asoc_pr_info("fixed_rate_put Capture rate is [%u]\n",
-            sprd_codec->ad_sample_val);
-
-        sprd_codec->ad1_sample_val = val;
-        sprd_codec_set_ad_sample_rate(codec,
-            sprd_codec->ad1_sample_val,
-            ADC1_SRC_N_MASK, ADC1_SRC_N);
-        sp_asoc_pr_info("fixed_rate_put Capture(ADC1) rate is [%u]\n",
-            sprd_codec->ad1_sample_val);
-    }
-
-    return 0;
-}
-//Added by zhanggeyin for [NVA-707] Add Audio Auto Test feature End
-
 static const struct snd_kcontrol_new sprd_codec_snd_controls[] = {
 	SPRD_CODEC_PGA_M("SPKL Playback Volume",
 			 SPRD_CODEC_PGA_SPKL, 2, spk_tlv),
@@ -3993,11 +3943,6 @@ static const struct snd_kcontrol_new sprd_codec_snd_controls[] = {
 		sprd_codec_adc1_lrclk_sel_put),
 
 	SOC_ENUM("DAS Input Mux", das_input_mux_enum),
-
-    //Added by zhanggeyin for [NVA-707] Add Audio Auto Test feature Begin
-    SOC_SINGLE_EXT("FIXED RATE", 0, 0, INT_MAX, 0,
-               fixed_rate_get, fixed_rate_put),
-    //Added by zhanggeyin for [NVA-707] Add Audio Auto Test feature End
 };
 
 static unsigned int sprd_codec_read(struct snd_soc_component *codec,

@@ -22,9 +22,6 @@ enum sprd_battery_jeita_types {
 	SPRD_BATTERY_JEITA_CDP,
 	SPRD_BATTERY_JEITA_UNKNOWN,
 	SPRD_BATTERY_JEITA_FCHG,
-	SPRD_BATTERY_JEITA_FLASH,
-	SPRD_BATTERY_JEITA_WL_BPP,
-	SPRD_BATTERY_JEITA_WL_EPP,
 	SPRD_BATTERY_JEITA_MAX,
 };
 
@@ -34,27 +31,15 @@ static const char * const sprd_battery_jeita_type_names[] = {
 	[SPRD_BATTERY_JEITA_CDP] = "cdp-jeita-temp-table",
 	[SPRD_BATTERY_JEITA_DCP] = "dcp-jeita-temp-table",
 	[SPRD_BATTERY_JEITA_FCHG] = "fchg-jeita-temp-table",
-	[SPRD_BATTERY_JEITA_FLASH] = "flash-jeita-temp-table",
-	[SPRD_BATTERY_JEITA_WL_BPP] = "wl-bpp-jeita-temp-table",
-	[SPRD_BATTERY_JEITA_WL_EPP] = "wl-epp-jeita-temp-table",
 };
-//Added by qinjinke@sagereal.com for NVA-1589 Nova plus charger begin 2022-10-14
-static const char * const sprd_battery_jeita_type_names_p[] = {
-	[SPRD_BATTERY_JEITA_UNKNOWN] = "unknown-jeita-temp-table-p",
-	[SPRD_BATTERY_JEITA_SDP] = "sdp-jeita-temp-table-p",
-	[SPRD_BATTERY_JEITA_CDP] = "cdp-jeita-temp-table-p",
-	[SPRD_BATTERY_JEITA_DCP] = "dcp-jeita-temp-table-p",
-	[SPRD_BATTERY_JEITA_FCHG] = "fchg-jeita-temp-table-p",
-	[SPRD_BATTERY_JEITA_FLASH] = "flash-jeita-temp-table-p",
-	[SPRD_BATTERY_JEITA_WL_BPP] = "wl-bpp-jeita-temp-table-p",
-	[SPRD_BATTERY_JEITA_WL_EPP] = "wl-epp-jeita-temp-table-p",
-};
-//Added by qinjinke@sagereal.com for NVA-1589 Nova plus charger end 2022-10-14
+
 struct sprd_battery_jeita_table {
 	int temp;
 	int recovery_temp;
 	int current_ua;
 	int term_volt;
+	int step_chg_cur;
+	int step_chg_volt;
 };
 
 struct sprd_battery_ir_compensation {
@@ -147,6 +132,7 @@ struct sprd_battery_info {
 	int first_capacity_calibration_capacity;
 
 	int force_jeita_status;
+	int bat_id;
 
 	/* celsius */
 	int battery_internal_resistance_temp_table[SPRD_BATTERY_INFO_RESISTENCE_TEMP_MAX];
@@ -172,6 +158,9 @@ struct sprd_battery_info {
 	struct sprd_battery_temp_cap_table *battery_temp_cap_table;
 	int battery_temp_cap_table_len;
 
+	struct sprd_battery_temp_cap_table *dischg_battery_temp_cap_table;
+	int dischg_battery_temp_cap_table_len;
+
 	struct sprd_battery_resistance_temp_table *battery_temp_resist_table;
 	int battery_temp_resist_table_len;
 
@@ -192,7 +181,7 @@ struct sprd_battery_info {
 extern void sprd_battery_put_battery_info(struct power_supply *psy,
 					  struct sprd_battery_info *info);
 extern int sprd_battery_get_battery_info(struct power_supply *psy,
-					 struct sprd_battery_info *info);
+					 struct sprd_battery_info *info, int battery_id);
 extern void sprd_battery_find_resistance_table(struct power_supply *psy,
 					       int **resistance_table,
 					       int table_len, int *temp_table,

@@ -113,9 +113,6 @@ struct sprd_cpufreq_driver_data {
 	bool version_judge;
 
 	cpumask_t cluster_cpumask;
-
-	/* SC9863A1 optimize_judge */
-	bool optimize_judge;
 };
 
 #define CPUFREQHW_NAME_LEN			30

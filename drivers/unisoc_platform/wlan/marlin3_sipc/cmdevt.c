@@ -23,6 +23,7 @@
 #include "intf_ops.h"
 #include "vendor.h"
 #include "work.h"
+#include <linux/of.h>
 #ifdef NAN_SUPPORT
 #include "nan.h"
 #endif /* NAN_SUPPORT */
@@ -402,7 +403,7 @@ static void sprdwl_cmd_unlock(struct sprdwl_cmd *cmd)
 	if (intf->priv->is_suspending == 1)
 		intf->priv->is_suspending = 0;
 }
-extern struct sprdwl_intf *g_intf;
+
 struct sprdwl_msg_buf *__sprdwl_cmd_getbuf(struct sprdwl_priv *priv,
 					   u16 len, u8 ctx_id,
 					   enum sprdwl_head_rsp rsp,
@@ -415,13 +416,7 @@ struct sprdwl_msg_buf *__sprdwl_cmd_getbuf(struct sprdwl_priv *priv,
 #if defined(SC2355_FTR)
 	void *data = NULL;
 	struct sprdwl_vif *vif;
-	struct sprdwl_intf *intf = g_intf;
 
-	if (!sprdwl_chip_is_on(intf)) {
-		pr_err("%s Drop command %s in case of power off\n",
-			__func__, cmd2str(cmd_id));
-		return NULL;
-	}
 	if (cmd_id >= WIFI_CMD_OPEN) {
 		vif = ctx_id_to_vif(priv, ctx_id);
 		if (!vif)
@@ -608,12 +603,6 @@ int sprdwl_cmd_send_recv(struct sprdwl_priv *priv,
 	intf = (struct sprdwl_intf *)(priv->hw_priv);
 	if (intf->cp_asserted == 1) {
 		wl_info("%s CP2 assert\n", __func__);
-		sprdwl_intf_free_msg_buf(priv, msg);
-#if defined(sc2355_FTR)
-		kfree(msg->tran_data);
-#else
-		dev_kfree_skb(msg->tran_data);
-#endif
 		return -EIO;
 	}
 	ret = sprdwl_api_available_check(priv, msg);
@@ -637,36 +626,6 @@ int sprdwl_cmd_send_recv(struct sprdwl_priv *priv,
 #endif
 	cmd_id = hdr->cmd_id;
 	ctx_id = hdr->common.ctx_id;
-
-	if (atomic_read(&intf->block_cmd_after_close) == 1) {
-		if (cmd_id != WIFI_CMD_CLOSE) {
-			wl_err("%s need block cmd after close: %s\n",
-					__func__, cmd2str(cmd_id));
-			sprdwl_intf_free_msg_buf(priv, msg);
-#if defined(SC2355_FTR)
-			kfree(msg->tran_data);
-#else
-			dev_kfree_skb(msg->skb);
-#endif
-			sprdwl_cmd_unlock(cmd);
-			goto out;
-		}
-	}
-
-	if (atomic_read(&intf->change_iface_block_cmd) == 1) {
-		if (cmd_id != WIFI_CMD_OPEN && cmd_id != WIFI_CMD_CLOSE) {
-			wl_info("%s need block cmd while change iface : %s\n",
-					__func__, cmd2str(cmd_id));
-			sprdwl_intf_free_msg_buf(priv, msg);
-#if defined(SC2355_FTR)
-			kfree(msg->tran_data);
-#else
-			dev_kfree_skb(msg->skb);
-#endif
-			sprdwl_cmd_unlock(cmd);
-			goto out;
-		}
-	}
 
 	reinit_completion(&cmd->completed);
 	ret = sprdwl_cmd_send_to_ic(priv, msg);
@@ -916,9 +875,30 @@ void sprdwl_download_ini(struct sprdwl_priv *priv)
 	kfree(wifi_data);
 }
 
+char *get_project_name5G(void)
+{
+	char *ptr = NULL;
+	const char *cmd_line;
+	struct device_node *cmdline_node;
+	int ret = 0;
+	cmdline_node = of_find_node_by_path("/chosen");
+  	if (cmdline_node){
+		  ret = of_property_read_string(cmdline_node, "bootargs", &cmd_line);
+	}
+	if(ret == 0){
+		ptr = strstr(cmd_line,"prj_name");
+	}
+	if(ptr != NULL) {
+		ptr +=strlen("prj_name=");
+		printk("[kernel] prj_name5G: &s",ptr);
+	}
+	return ptr;
+}
+
 int sprdwl_get_fw_info(struct sprdwl_priv *priv)
 {
 	int ret;
+	char *prj_name = get_project_name5G();
 	struct sprdwl_msg_buf *msg;
 	struct sprdwl_cmd_fw_info *p;
 	struct sprdwl_tlv_data *tlv;
@@ -972,6 +952,32 @@ int sprdwl_get_fw_info(struct sprdwl_priv *priv)
 		priv->chip_ver = p->chip_version;
 		priv->fw_ver = p->fw_version;
 		priv->fw_capa = p->fw_capa;
+		if (prj_name != NULL && (strncmp(prj_name,"2171A",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"2171C",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"2171B",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"2171D",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"2171E",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"21724",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"2171F",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"21721",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"21720",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"21722",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else if (prj_name != NULL && (strncmp(prj_name,"21723",5) == 0)) {
+			printk("[kernel] keepon 5GWIFI");
+		}else{
+			priv->fw_capa &= ~(1 << 0);
+			printk("[kernel] Shutdown 5GWIFI");
+		}
 		priv->fw_std = p->fw_std;
 		priv->extend_feature = p->extend_feature;
 		priv->max_ap_assoc_sta = p->max_ap_assoc_sta;

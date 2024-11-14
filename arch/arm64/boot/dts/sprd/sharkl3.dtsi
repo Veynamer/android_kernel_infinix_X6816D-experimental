@@ -686,7 +686,7 @@
 					<&aon_clk CLK_PWM1>,
 					<&aon_clk CLK_PWM2>;
 				assigned-clock-parents = <&ext_26m>,
-					<&ext_26m>,
+					<&pll CLK_TWPLL_48M>,
 					<&ext_26m>;
 				#pwm-cells = <2>;
 			};
@@ -909,20 +909,6 @@
 				reg = <0 0x41800000 0 0x200000>;
 				#address-cell = <1>;
 				#size-cell = <0>;
-			};
-
-			socid: socid@402e00e0{
-				compatible = "sprd,soc-id";
-				chip_id = <&aon_apb_regs REG_AON_APB_AON_CHIP_ID0
-					MASK_AON_APB_AON_CHIP_ID0>;
-				plat_id = <&aon_apb_regs REG_AON_APB_AON_PLAT_ID0
-					MASK_AON_APB_AON_PLAT_ID0>;
-				implement_id = <&aon_apb_regs REG_AON_APB_AON_IMPL_ID
-					MASK_AON_APB_AON_IMPL_ID>;
-				manufacture_id = <&aon_apb_regs  REG_AON_APB_AON_MFT_ID
-					MASK_AON_APB_AON_MFT_ID>;
-				version_id = <&aon_apb_regs REG_AON_APB_AON_VER_ID
-					MASK_AON_APB_AON_VER_ID>;
 			};
 
 		};
@@ -1423,7 +1409,8 @@
 
 			dmc_controller: dmc-controller@300001a8 {
 				compatible = "sprd,pub-dmc-original";
-				reg = <0x0 0x300001a8 0x0 0x100>;
+				reg = <0x0 0x300001a8 0x0 0x100>,
+				    <0x0 0x30000000 0x0 0x12c>;/* dmc res */
 			};
 		};
 	};

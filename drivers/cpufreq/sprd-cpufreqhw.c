@@ -233,7 +233,6 @@ static int sprd_hardware_cpufreq_init_slaves(
 
 		data->cluster = cluster;
 		data->online = true;
-		data->optimize_judge = false;
 		c_host->sub_cluster_bits |= (0x1 << cluster);
 
 		/*
@@ -343,16 +342,12 @@ static int sprd_hardware_cpufreq_init(struct cpufreq_policy *policy)
 	}
 
 	data->online  = true;
-	data->optimize_judge = false;
 	data->cpu_dev = cpu_dev;
 	data->cluster = curr_cluster;
 
 	/* TODO: need to get new temperature from thermal zone after hotplug */
 	if (cpufreq_datas[0])
 		data->temp_now = cpufreq_datas[0]->temp_now;
-
-	if (!cpufreq_datas[data->cluster])
-		cpufreq_datas[data->cluster] = data;
 
 	/* Get OPP table information from dts and initialize the map */
 	ret = dev_pm_opp_of_add_table_binning(is_big_cluster(cpu),
@@ -386,6 +381,9 @@ static int sprd_hardware_cpufreq_init(struct cpufreq_policy *policy)
 	cpumask_or(policy->cpus, policy->cpus,
 		   &(data->cluster_cpumask));
 #endif
+
+	if (!cpufreq_datas[data->cluster])
+		cpufreq_datas[data->cluster] = data;
 
 	/* Initialize the slave modules whose voltage and frequency are
 	 * voted by cpu clusters, so we call this kind  module as

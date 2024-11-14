@@ -29,6 +29,8 @@
 #include "sprd_plane.h"
 #include "sysfs/sysfs_display.h"
 
+bool vrr_mode; /* Variable Refresh Rate mode */
+
 static void sprd_dpu_enable(struct sprd_dpu *dpu);
 static void sprd_dpu_disable(struct sprd_dpu *dpu);
 
@@ -317,6 +319,20 @@ void sprd_dpu_stop(struct sprd_dpu *dpu)
 	drm_crtc_vblank_off(&dpu->crtc->base);
 }
 
+int cali_sprd_dpu_stop(struct sprd_dpu *dpu)
+{
+	struct dpu_context *ctx = &dpu->ctx;
+
+
+	if (dpu->core && dpu->core->stop)
+		dpu->core->stop(ctx);
+
+	drm_crtc_handle_vblank(&dpu->crtc->base);
+	drm_crtc_vblank_off(&dpu->crtc->base);
+
+	return 0;
+}
+
 static void sprd_dpu_enable(struct sprd_dpu *dpu)
 {
 	struct dpu_context *ctx = &dpu->ctx;
@@ -446,6 +462,9 @@ static struct sprd_dsi *sprd_dpu_dsi_attach(struct sprd_dpu *dpu)
 		DRM_ERROR("dpu attach dsi failed\n");
 		return NULL;
 	}
+#ifdef LCD_CONFIG_POWER_ESD_ON
+	dsi->dpu = dpu;
+#endif
 
 	return dsi;
 }
@@ -456,8 +475,13 @@ static int sprd_dpu_bind(struct device *dev, struct device *master, void *data)
 	struct sprd_dpu *dpu = dev_get_drvdata(dev);
 	struct sprd_crtc_capability cap = {};
 	struct sprd_plane *planes;
+	struct sprd_drm *sprd = drm->dev_private;
 
 	DRM_INFO("%s()\n", __func__);
+		
+	sprd = drm->dev_private;
+	dpu = dev_get_drvdata(dev);
+	dpu->drm = drm;
 
 	dpu->core->version(&dpu->ctx);
 	dpu->core->capability(&dpu->ctx, &cap);
@@ -575,7 +599,9 @@ static int sprd_dpu_context_init(struct sprd_dpu *dpu,
 
 	sema_init(&ctx->lock, 1);
 	sema_init(&ctx->cabc_lock, 1);
+	mutex_init(&ctx->vrr_lock);
 	init_waitqueue_head(&ctx->wait_queue);
+	mutex_init(&ctx->vrr_lock);
 
 	ctx->panel_ready = true;
 	ctx->time = 5000;

@@ -55,8 +55,15 @@ static struct sprd_asoc_hook_spk_priv hook_spk_priv;
 #define EN_LEVEL 1
 
 static int select_mode;
+//#ifdef OPLUS_EDIT
+//liyunfan@ODM.HQ.Multimeida.Audio,algorithm compatible of second pa,2021/9/23
+static int det_type;
+//#endif /* OPLUS_EDIT */
 static u32 extral_iic_pa_en;
-
+#ifdef CONFIG_SND_SOC_UNISOC_CODEC_SIA81XX
+extern void sia81xx_resume_for_sprd(void);
+extern void sia81xx_suspend_for_sprd(void);
+#endif
 static ssize_t select_mode_show(struct kobject *kobj,
 				struct kobj_attribute *attr, char *buff)
 {
@@ -81,6 +88,14 @@ static ssize_t select_mode_store(struct kobject *kobj,
 
 	return len;
 }
+//#ifdef OPLUS_EDIT
+//liyunfan@ODM.HQ.Multimeida.Audio,algorithm compatible of second pa,2021/9/23
+static ssize_t pa_info_show(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buff)
+{
+	return sprintf(buff, "%s\n", det_type?"awxxx":"siaxx");
+}
+//#endif /* OPLUS_EDIT */
 
 static int ext_debug_sysfs_init(void)
 {
@@ -90,6 +105,13 @@ static int ext_debug_sysfs_init(void)
 		__ATTR(select_mode, 0644,
 		select_mode_show,
 		select_mode_store);
+    //#ifdef OPLUS_EDIT
+    //liyunfan@ODM.HQ.Multimeida.Audio,algorithm compatible of second pa,2021/9/23
+    static struct kobj_attribute ext_info_attr =
+        __ATTR(pa_info, 0644,
+        pa_info_show,
+        NULL);
+    //#endif /* OPLUS_EDIT */
 
 	if (ext_debug_kobj)
 		return 0;
@@ -105,7 +127,14 @@ static int ext_debug_sysfs_init(void)
 		pr_err("create sysfs failed. ret = %d\n", ret);
 		return ret;
 	}
-
+    //#ifdef OPLUS_EDIT
+    //liyunfan@ODM.HQ.Multimeida.Audio,algorithm compatible of second pa,2021/9/23
+    ret = sysfs_create_file(ext_debug_kobj, &ext_info_attr.attr);
+    if (ret) {
+        pr_err("create sysfs failed. ret = %d\n", ret);
+        return ret;
+    }
+    //#endif /* OPLUS_EDIT */
 	return ret;
 }
 
@@ -182,8 +211,48 @@ static int hook_general_spk(int id, int on)
 	return HOOK_OK;
 }
 
+static int hook_general_spk_for_sia8xx(int id, int on)
+{
+	int gpio, mode;
+
+	sp_asoc_pr_info("%s enter\n", __func__);
+	gpio = hook_spk_priv.gpio[id];
+	if (gpio < 0) {
+		pr_err("%s gpio is invalid!\n", __func__);
+		return -EINVAL;
+	}
+	mode = hook_spk_priv.priv_data[id];
+	if (mode > GENERAL_SPK_MODE)
+		mode = 0;
+	pr_info("%s id: %d, gpio: %d, mode: %d, on: %d\n",
+		 __func__, id, gpio, mode, on);
+
+        /* Off */
+        if (!on) {
+            gpio_set_value(gpio, !EN_LEVEL);
+            return HOOK_OK;
+        }
+
+        /* On */
+        if (select_mode) {
+            mode = select_mode;
+            pr_info("%s mode: %d, select_mode: %d\n",
+                __func__, mode, select_mode);
+        }
+        pr_info("%s, line = %d gpio = %d mode = %d\n", __func__, __LINE__,gpio , mode);
+        hook_gpio_pulse_control(gpio, mode);
+        /* When the first time open speaker path and play a very short sound,
+         * the sound can't be heard. So add a delay here to make sure the AMP
+         * is ready.
+         */
+        msleep(22);
+	return HOOK_OK;
+}
+
 static struct sprd_asoc_ext_hook_map ext_hook_arr[] = {
+	//{"aw87xx", hook_spk_aw87xxx, EN_LEVEL},
 	{"general_speaker", hook_general_spk, EN_LEVEL},
+	{"general_speaker", hook_general_spk_for_sia8xx, !EN_LEVEL},
 };
 
 static int sprd_asoc_card_parse_hook(struct device *dev,
@@ -193,6 +262,8 @@ static int sprd_asoc_card_parse_hook(struct device *dev,
 	const char *prop_pa_info = "sprd,spk-ext-pa-info";
 	const char *prop_pa_gpio = "sprd,spk-ext-pa-gpio";
 	const char *extral_iic_pa_info = "extral-iic-pa";
+    	const char *prop_pa_det = "sprd,spk-ext-pa-det";
+	int det_gpio;
 	int spk_cnt, elem_cnt, i;
 	int ret = 0;
 	unsigned long gpio_flag;
@@ -294,8 +365,8 @@ static int sprd_asoc_card_parse_hook(struct device *dev,
 			GPIOF_INIT_HIGH : GPIOF_INIT_LOW;
 		ret = gpio_request_one(hook_spk_priv.gpio[ext_ctrl_type],
 				       gpio_flag, NULL);
-		dev_info(dev, "Gpio request[%d] ret:%d! hook_p = %p, ext_ctrl_p = %p \n",
-			ext_ctrl_type, ret, ext_hook, ext_hook->ext_ctrl[ext_ctrl_type]);
+		dev_info(dev, "Gpio request[%d] ret:%d! hook_p = %p, ext_ctrl_p = %p en_level = %d\n",
+			ext_ctrl_type, ret, ext_hook, ext_hook->ext_ctrl[ext_ctrl_type],ext_hook_arr[hook_sel].en_level);
 		if (ret == 0) {
 			hook_spk_priv.gpio_requested[ext_ctrl_type] = true;
 		} else if (ret < 0) {
@@ -305,8 +376,37 @@ static int sprd_asoc_card_parse_hook(struct device *dev,
 			ext_hook->ext_ctrl[ext_ctrl_type] = NULL;
 			return ret;
 		}
+        //#ifdef OPLUS_EDIT
+        //liyunfan@ODM.HQ.Multimeida.Audio,algorithm compatible of second pa,2021/9/23
+        // det
+        det_gpio = of_get_named_gpio_flags(np, prop_pa_det, i, NULL);
+        dev_info(dev, "det_gpio %d\n", det_gpio);
+        if (det_gpio < 0) {
+            dev_err(dev, "%s not exit! skip\n", prop_pa_det);
+        } else {
+            // detect pa type
+            gpio_flag = GPIOF_DIR_IN;
+            ret = gpio_request_one(det_gpio, gpio_flag, "det_gpio");
+            dev_info(dev, "gpio_request_one ret %d\n", ret);
+            if (ret < 0) {
+                det_type = 0;
+                dev_err(dev, "det_gpio det request failed:%d!\n", ret);
+            } else {
+                det_type = gpio_get_value(det_gpio);
+                dev_info(dev, "det_gpio det:%d\n", det_type);
+            }
+        }
+        //#endif /* OPLUS_EDIT */
 	}
-
+    //#ifdef OPLUS_EDIT
+    //liyunfan@ODM.HQ.Multimeida.Audio,algorithm compatible of second pa,2021/9/23
+    dev_info(dev, "det_gpio det :%d,mode = %d\n", det_type,hook_spk_priv.priv_data[0]);
+    if(!det_type){
+        hook_spk_priv.priv_data[0] = 2;
+        dev_info(dev, "det_gpio det2 :%d,mode = %d\n", det_type,hook_spk_priv.priv_data[0]);
+    }
+    //#endif /* OPLUS_EDIT */
+    msleep(2);
 	return 0;
 }
 int sprd_asoc_card_parse_ext_hook(struct device *dev,

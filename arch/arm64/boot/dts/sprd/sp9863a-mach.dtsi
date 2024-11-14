@@ -5,9 +5,7 @@
  * Copyright (C) 2019, Unisoc Inc.
  *
  */
-#include "sc9863a-wcn.dtsi"
-#include "lcd/lcd_ft8006s_hx_hkc_mipi_nova.dtsi"
-#include "lcd/lcd_st7123_dzx_hkc_mipi_nova.dtsi"
+
 #include "lcd/lcd_dummy_mipi.dtsi"
 #include <dt-bindings/thermal/thermal.h>
 / {
@@ -131,6 +129,7 @@
 	ddr_dfs: scene-frequency {
 		compatible = "sprd,ddr-dvfs";
 		freq-num = <8>;
+		info-socdump-enable-flag;
 	};
 
 	sprd-sensorhub {
@@ -141,13 +140,7 @@
 		compatible = "sprd,autotest";
 		sprd,pinctrl = <&pin_controller>;
 	};
-	
-	extcon_gpio: extcon-gpio {
-		compatible = "linux,extcon-usb-gpio";
-		vbus-gpio = <&pmic_eic 0 GPIO_ACTIVE_HIGH>;
-		id-gpio = <&eic_debounce 4 GPIO_ACTIVE_HIGH>;//GPIO126
-	};
-	
+
 	trusty {
 		compatible = "sprd,trusty-smc-v1";
 
@@ -358,29 +351,9 @@
 	mmc-hs400-1_8v;
 	mmc-hs200-1_8v;
 	mmc-ddr-1_8v;
-	sprd,name = "sdio_emmc";
-	sprd,sdio-adma;
 	no-sdio;
 	no-sd;
 	status = "okay";
-	sprd,wp_fn = "enable";
-};
-
-&hsphy {
-	vdd-supply = <&vddusb33>;
-	extcon = <&extcon_gpio>;
-};
-
-&sprd_headset {
-	status = "okay";
-	sprd,spk-route-hp;
-};
-
-&sound_vbc_r1p0v3_sprd_codec {
-	status = "okay";
-	/*ext_control_type, hook selection, mode, gpio share*/
-	sprd,spk-ext-pa-info = <0 0 3 0>;
-	sprd,spk-ext-pa-gpio = <&ap_gpio 156 0>;
 };
 
 &modem_dbg_log {

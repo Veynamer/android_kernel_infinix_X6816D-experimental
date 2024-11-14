@@ -8,6 +8,7 @@
 #include <dt-bindings/mfd/sprd,sc2730-mask.h>
 #include <dt-bindings/usb/pd.h>
 #include "lcd/lcd_g40396_truly_mipi_fhd.dtsi"
+#include "lcd/lcd_nt36672e_truly_mipi_fhd.dtsi"
 #include "lcd/lcd_dummy_mipi.dtsi"
 #include "ums9230-wcn.dtsi"
 
@@ -249,7 +250,7 @@
 
 				/* how much time to allow capacity change */
 				cm-one-cap-time = <30>;
-				/* cm-thermal-zone = "board-thmzone"; */
+				cm-thermal-zone = "board-thmzone";
 				/* when the safe charging voltage is exceeded, stop charging */
 				cm-charge-voltage-max = <6500000>;
 				cm-fast-charge-voltage-max = <10500000>;
@@ -368,10 +369,6 @@
 &reserved_memory {
 	#address-cells = <2>;
 	#size-cells = <2>;
-	wcn_reserved: wcn-mem@87000000 {
-		reg = <0x0 0x87000000 0x0 0x00800000>;
-	};
-
 	logo_reserved: logobuffer@9e000000{
 		reg = <0x0 0x9e000000 0x0 0x00ab0000>;
 	};

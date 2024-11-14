@@ -270,10 +270,8 @@ static inline bool sprdwl_is_group(unsigned char *addr)
 	return false;
 }
 
-void sprdwl_sipc_init(struct sprdwl_priv *priv, struct sprdwl_intf *intf);
-void sprdwl_sipc_deinit(struct sprdwl_intf *dev);
-int sprdwl_intf_init(struct sprdwl_intf *intf);
-void sprdwl_intf_deinit(void);
+int sprdwl_intf_init(struct sprdwl_priv *priv, struct sprdwl_intf *intf);
+void sprdwl_intf_deinit(struct sprdwl_intf *dev);
 int if_tx_cmd(struct sprdwl_intf *intf, unsigned char *data, int len);
 int if_tx_one(struct sprdwl_intf *intf, unsigned char *data, int len,
 	      int chn);

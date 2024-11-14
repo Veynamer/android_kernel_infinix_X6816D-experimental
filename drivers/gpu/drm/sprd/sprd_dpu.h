@@ -21,6 +21,7 @@
 #include "disp_lib.h"
 #include "disp_trusty.h"
 #include "sprd_dsi.h"
+#include "sprd_dsi_panel.h"
 #include "dsi/sprd_dsi_api.h"
 #include "dsi/sprd_dsi_hal.h"
 
@@ -103,16 +104,6 @@ struct dpu_glb_ops {
 	void (*power)(struct dpu_context *ctx, int enable);
 };
 
-struct scale_config_param {
-	bool sr_mode_changed;
-	bool need_scale;
-	u8 skip_layer_index;
-	u32 in_w;
-	u32 in_h;
-	u32 out_w;
-	u32 out_h;
-};
-
 struct dpu_context {
 	/* dpu common parameters */
 	void __iomem *base;
@@ -169,9 +160,10 @@ struct dpu_context {
 	int time;
 	struct disp_message *tos_msg;
 
-	/* vrr config parameters */
-	bool fps_mode_changed;
-	bool wb_size_changed;
+	/* VRR mode parameters */
+	int  vrr_vfp;
+	int  vrefresh;
+	struct mutex vrr_lock;
 
 	/* other specific parameters */
 	bool panel_ready;
@@ -179,9 +171,6 @@ struct dpu_context {
 	unsigned long logo_size;
 	u32 prev_y2r_coef;
 	u64 frame_count;
-
-	/* scaling config parameters */
-	struct scale_config_param scale_cfg;
 };
 
 struct sprd_dpu_ops {
@@ -199,7 +188,10 @@ struct sprd_dpu {
 	const struct dpu_glb_ops *glb;
 	struct drm_display_mode *mode;
 	struct sprd_dsi *dsi;
+	struct drm_device *drm;
 };
+
+extern bool vrr_mode;
 
 void sprd_dpu_run(struct sprd_dpu *dpu);
 void sprd_dpu_stop(struct sprd_dpu *dpu);
@@ -231,6 +223,10 @@ extern const struct dpu_glb_ops qogirl6_dpu_glb_ops;
 extern const struct dpu_core_ops dpu_r6p0_core_ops;
 extern const struct dpu_clk_ops qogirn6pro_dpu_clk_ops;
 extern const struct dpu_glb_ops qogirn6pro_dpu_glb_ops;
+extern bool vrr_mode;
 
+int cali_sprd_dpu_stop(struct sprd_dpu *dpu);
+int cali_dpu_clk_disable(struct dpu_context *ctx);
+void cali_dpu_glb_disable(struct dpu_context *ctx);
 
 #endif /* _SPRD_DPU_H_ */
