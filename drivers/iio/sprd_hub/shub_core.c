@@ -26,6 +26,8 @@
 #include <linux/sipc.h>
 #include <linux/slab.h>
 #include <linux/soc/sprd/sprd_systimer.h>
+#include <linux/device_info.h>
+#include <linux/hardware_info.h>
 #include <linux/string.h>
 #include <linux/suspend.h>
 #include <linux/sysfs.h>
@@ -125,7 +127,7 @@ static struct sensor_cali_info light_cali_info;
 static struct sensor_cali_info prox_cali_info;
 static struct sensor_cali_info pressure_cali_info;
 static struct sensor_cali_info color_temp_cali_info;
-
+static char acc_name[128];
 static void get_sensor_info(char **sensor_name,
 			    int sensor_type,
 			    int success_num)
@@ -152,6 +154,32 @@ static void get_sensor_info(char **sensor_name,
 	memcpy(hw_sensor_id[now_order].pname, sensor_name[success_num],
 	       strlen(sensor_name[success_num]));
 	hw_sensor_id[now_order].id_status = _IDSTA_OK;
+
+#ifndef VENDOR_KERNEL
+    if(sensor_type == 1)
+    {
+        hq_register_sensor_info(ACCEL_HQ,hw_sensor_id[now_order].pname);
+        memcpy(acc_name, sensor_name[success_num],
+                    strlen(sensor_name[success_num])); //Read the acc device name 3/25
+        printk("acc_name =  %s  \n",acc_name);
+    }
+    else if(sensor_type == 2)
+        hq_register_sensor_info(MSENSOR_HQ, hw_sensor_id[now_order].pname);
+    else if(sensor_type == 4)
+        hq_register_sensor_info(GYRO_HQ,hw_sensor_id[now_order].pname);
+    else if(sensor_type == 5)
+        hq_register_sensor_info(ALSPS_HQ, hw_sensor_id[now_order].pname);
+#endif
+    if(sensor_type == 1)
+        get_hardware_info_data(HWID_GSENSOR,hw_sensor_id[now_order].pname);
+    else if(sensor_type == 2)
+        get_hardware_info_data(HWID_MSENSOR,hw_sensor_id[now_order].pname);
+    else if(sensor_type == 5)
+        get_hardware_info_data(HWID_ALS,hw_sensor_id[now_order].pname);
+    else if(sensor_type == 8)
+        get_hardware_info_data(HWID_PS,hw_sensor_id[now_order].pname);
+    get_hardware_info_data(HWID_GYROSCOPE,"virtual_gyro");
+
 }
 
 /**
@@ -263,6 +291,37 @@ static int shub_send_command(struct shub_data *sensor, int sensor_ID,
 	mutex_unlock(&sensor->send_command_mutex);
 
 	return ret;
+}
+
+//abtain prj_name
+extern int prj_name;
+int get_prj_name(struct shub_data *sensor)
+{
+	char prj_name_tmp = '\0';
+
+	printk("yudezhi kernel prj_name = %d \n",prj_name);
+
+	if(prj_name == 1)
+	{
+		prj_name_tmp = '1';    //prj_name = 1;//NICO
+	}
+	else if(prj_name == 2)
+	{
+		prj_name_tmp = '2';    //prj_name = 2;//NICKY
+	}
+	else if(prj_name == 3)
+	{
+		prj_name_tmp = '3';    //prj_name = 3;//NICKY-A
+	}
+
+	shub_send_command(sensor,
+			  HANDLE_MAX,
+			  AP_SEND_DATA_TO_DYNAMIC_SUBTYPE,
+			  &prj_name_tmp,
+			  sizeof(prj_name_tmp));
+
+	printk("yudezhi kernel prj_name_tmp = %c  \n",prj_name_tmp);
+	return 0;
 }
 
 static int shub_sipc_channel_read(struct shub_data *sensor)
@@ -989,34 +1048,34 @@ static int check_proximity_cali_data(struct shub_data *sensor)
 
 	memcpy(&prox_cali, sensor->cali_store.udata, sizeof(prox_cali));
 
-	dev_info(&sensor->sensor_pdev->dev,
-		 "ground_noise = %d; high_thrd = %d; low_thrd = %d; cali_flag = %d\n",
-		 prox_cali.ground_noise, prox_cali.high_threshold,
-		 prox_cali.low_threshold, prox_cali.cali_flag);
-	/* prox sensor factory auto calibration */
-	if ((prox_cali.cali_flag & 0x01) == 0x01 &&
-	    prox_cali.ground_noise < PROX_SENSOR_MIN_VALUE) {
-		dev_err(&sensor->sensor_pdev->dev,
-			"prox sensor auto cali out of minrange failed!\n");
-		return CALIB_STATUS_OUT_OF_MINRANGE;
-	}
+    dev_info(&sensor->sensor_pdev->dev,
+        "ground_noise = %d; high_thrd = %d; low_thrd = %d; cali_flag = %d type = %d\n",
+        prox_cali.ground_noise,
+        prox_cali.high_threshold,
+        prox_cali.low_threshold,
+        prox_cali.cali_flag,
+        sensor->cal_type);
 
-	/* prox sensor factory manual calibration */
-	if ((prox_cali.cali_flag & 0x06) == 0x06 &&
-	    prox_cali.high_threshold < prox_cali.low_threshold) {
-		dev_err(&sensor->sensor_pdev->dev,
-			"prox sensor cali failed! the high_thrd < low_thrd!\n");
-		return -EINVAL;
-	}
+    /* prox sensor factory 3cm calibration */
+    if ((prox_cali.cali_flag & 0x03) == 0x03 && (sensor->cal_type) == 1 &&
+        (prox_cali.high_threshold - prox_cali.ground_noise) < 20) {
+        dev_err(&sensor->sensor_pdev->dev,
+            "prox sensor cali failed! the high_thrd - low_thrd <20\n");
+        printk("factory calibration fail\n");
+        return -EINVAL;
+    }
 
 	return 0;
 }
 
 static int check_acc_cali_data(struct shub_data *sensor)
 {
+	int diff=0;
 	struct acc_gyro_cali_data acc_cali_data;
 
 	memcpy(&acc_cali_data, sensor->cali_store.udata, sizeof(acc_cali_data));
+	diff = strcmp(acc_name,"accelerometer_sc7a20"); //contrast device name 3/25
+	printk("diff = %d , acc_name = %s\n",diff,acc_name);
 
 	dev_info(&sensor->sensor_pdev->dev,
 		 "x_bias = %d; y_bias = %d; z_bias = %d\n",
@@ -1024,12 +1083,25 @@ static int check_acc_cali_data(struct shub_data *sensor)
 		 acc_cali_data.y_bias,
 		 acc_cali_data.z_bias);
 
-	if (abs(acc_cali_data.x_bias) > ACC_MAX_X_Y_BIAS_VALUE ||
-	    abs(acc_cali_data.y_bias) > ACC_MAX_X_Y_BIAS_VALUE ||
-	    abs(acc_cali_data.z_bias) > ACC_MAX_Z_BIAS_VALUE) {
-		dev_err(&sensor->sensor_pdev->dev,
-			"acc sensor cali failed! the bias is too big!\n");
-		return -EINVAL;
+	if (diff == 0) //acc_name == accelerometer_sc7a20
+	{
+		if (abs(acc_cali_data.x_bias) > ACC_MAX_X_Y_BIAS_VALUE ||
+			abs(acc_cali_data.y_bias) > ACC_MAX_X_Y_BIAS_VALUE ||
+			abs(acc_cali_data.z_bias) > 30000) {
+			dev_err(&sensor->sensor_pdev->dev,
+				"acc sc7a20 sensor cali failed! the bias is too big!\n");
+			return -EINVAL;
+		}
+	}else  //acc_name == other
+	{
+		if (abs(acc_cali_data.x_bias) > ACC_MAX_X_Y_BIAS_VALUE ||
+			abs(acc_cali_data.y_bias) > ACC_MAX_X_Y_BIAS_VALUE ||
+			abs(acc_cali_data.z_bias) > ACC_MAX_Z_BIAS_VALUE) {
+			dev_err(&sensor->sensor_pdev->dev,
+				"acc sensor cali failed! the bias is too big!\n");
+			return -EINVAL;
+		}
+
 	}
 
 	return 0;
@@ -1287,6 +1359,7 @@ static int set_als_calib_cmd(struct shub_data *sensor)
 		als_cali_coef = LIGHT_SENSOR_CALI_VALUE / average_als;
 		status = CALIB_STATUS_PASS;
 	}
+    pr_info("light sensor als_cali_coef :%d\n",als_cali_coef );
 	memcpy(als_data, &als_cali_coef, sizeof(als_cali_coef));
 
 	err = shub_save_als_cali_data(sensor, als_data, sizeof(als_data));
@@ -2447,6 +2520,8 @@ static struct platform_driver shub_driver = {
 };
 
 module_platform_driver(shub_driver);
+MODULE_SOFTDEP("pre: device_info");
+MODULE_SOFTDEP("pre: hardware_info");
 
 MODULE_DESCRIPTION("Spreadtrum Sensor Hub");
 MODULE_LICENSE("GPL v2");

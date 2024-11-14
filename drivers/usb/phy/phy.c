@@ -268,6 +268,8 @@ EXPORT_SYMBOL_GPL(usb_phy_get_charger_current);
 void usb_phy_set_charger_state(struct usb_phy *usb_phy,
 			       enum usb_charger_state state)
 {
+
+	pr_info("usb_phy_set_charger_state old %d new %d\n", usb_phy->chg_state, state);
 	if (usb_phy->chg_state == state || !usb_phy->charger_detect)
 		return;
 

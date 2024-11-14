@@ -57,16 +57,18 @@ static int z_erofs_lz4_prepare_destpages(struct z_erofs_decompress_req *rq,
 
 		if (page) {
 			__clear_bit(j, bounced);
-			if (PageHighMem(page)) {
-				kaddr = NULL;
-			} else if (kaddr) {
-				if (kaddr + PAGE_SIZE == page_address(page))
+			if (!PageHighMem(page)) {
+				if (!i) {
+					kaddr = page_address(page);
+					continue;
+				}
+				if (kaddr &&
+				    kaddr + PAGE_SIZE == page_address(page)) {
 					kaddr += PAGE_SIZE;
-				else
-					kaddr = NULL;
-			} else if (!i) {
-				kaddr = page_address(page);
+					continue;
+				}
 			}
+			kaddr = NULL;
 			continue;
 		}
 		kaddr = NULL;
@@ -77,10 +79,8 @@ static int z_erofs_lz4_prepare_destpages(struct z_erofs_decompress_req *rq,
 			get_page(victim);
 		} else {
 			victim = erofs_allocpage(pagepool, GFP_KERNEL, false);
-			if (!victim) {
-				erofs_err(rq->sb, "line:%d erofs_allocpage() failed!", __LINE__);
+			if (!victim)
 				return -ENOMEM;
-			}
 			victim->mapping = Z_EROFS_MAPPING_STAGING;
 		}
 		rq->out[i] = victim;
@@ -287,10 +287,8 @@ static int z_erofs_decompress_generic(struct z_erofs_decompress_req *rq,
 		vm_unmap_aliases();
 	}
 
-	if (!dst) {
-		erofs_err(rq->sb, "line:%d kmap(out) failed!", __LINE__);
+	if (!dst)
 		return -ENOMEM;
-	}
 
 	dst_maptype = 2;
 

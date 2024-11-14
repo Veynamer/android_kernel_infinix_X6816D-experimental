@@ -20,9 +20,35 @@
 #include "sprd_dsi.h"
 #include "sprd_dsi_panel.h"
 #include "sysfs_display.h"
+#include "dsi/sprd_dsi_api.h"
 
 #define host_to_dsi(host) \
 	container_of(host, struct sprd_dsi, host)
+extern int sprd_oled_set_brightness(struct backlight_device *bdev);
+
+static ssize_t oled_backlight_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct sprd_panel *panel = dev_get_drvdata(dev);
+	int brightness;
+	int ret;
+
+    if (strstr(panel->lcd_name,"lcd_dummy_mipi_hd") != NULL){
+        return 0;
+    }
+	ret = kstrtoint(buf, 10, &brightness);
+	if (ret) {
+		pr_err("Invalid input brightness value\n");
+		return -EINVAL;
+	}
+
+	panel->oled_bdev->props.brightness = brightness;
+	sprd_oled_set_brightness(panel->oled_bdev);
+
+	return count;
+}
+static DEVICE_ATTR_WO(oled_backlight);
 
 static ssize_t name_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -99,7 +125,7 @@ static ssize_t hporch_show(struct device *dev,
 	struct videomode vm;
 	int ret;
 
-	drm_display_mode_to_videomode(&panel->info.mode, &vm);
+	drm_display_mode_to_videomode(&panel->info.curr_mode, &vm);
 	ret = snprintf(buf, PAGE_SIZE, "hfp=%u hbp=%u hsync=%u\n",
 				   vm.hfront_porch,
 				   vm.hback_porch,
@@ -154,7 +180,7 @@ static ssize_t vporch_show(struct device *dev,
 	struct videomode vm;
 	int ret;
 
-	drm_display_mode_to_videomode(&panel->info.mode, &vm);
+	drm_display_mode_to_videomode(&panel->info.curr_mode, &vm);
 	ret = snprintf(buf, PAGE_SIZE, "vfp=%u vbp=%u vsync=%u\n",
 				   vm.vfront_porch,
 				   vm.vback_porch,
@@ -366,6 +392,8 @@ static ssize_t suspend_store(struct device *dev,
 	struct sprd_panel *panel = dev_get_drvdata(dev);
 	struct mipi_dsi_host *host = panel->slave->host;
 	struct sprd_dsi *dsi = host_to_dsi(host);
+	sprd_dsi_set_work_mode(dsi, DSI_MODE_CMD);
+    sprd_dsi_lp_cmd_enable(dsi, true);
 
 	if (dsi->ctx.enabled && panel->enabled) {
 		drm_panel_disable(&panel->base);
@@ -382,14 +410,14 @@ static ssize_t resume_store(struct device *dev,
 				const char *buf, size_t count)
 {
 	struct sprd_panel *panel = dev_get_drvdata(dev);
-	struct mipi_dsi_host *host = panel->slave->host;
-	struct sprd_dsi *dsi = host_to_dsi(host);
+	//struct mipi_dsi_host *host = panel->slave->host;
+	//struct sprd_dsi *dsi = host_to_dsi(host);
 
-	if (dsi->ctx.enabled && (!panel->enabled)) {
+	//if (dsi->ctx.enabled && (!panel->enabled)) {
 		drm_panel_prepare(&panel->base);
 		drm_panel_enable(&panel->base);
-		panel->enabled = true;
-	}
+	//	panel->enabled = true;
+	//}
 
 	return count;
 }
@@ -410,6 +438,7 @@ static struct attribute *panel_attrs[] = {
 	&dev_attr_esd_check_value.attr,
 	&dev_attr_suspend.attr,
 	&dev_attr_resume.attr,
+	&dev_attr_oled_backlight.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(panel);

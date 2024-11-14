@@ -57,13 +57,13 @@ static inline void touch_all_softlockup_watchdogs(void) { }
 #define lockup_detector_online_cpu	NULL
 #define lockup_detector_offline_cpu	NULL
 #endif /* CONFIG_SOFTLOCKUP_DETECTOR */
-
-#ifdef CONFIG_DETECT_HUNG_TASK
+//odm alm_id:5321993 struk to reboot function ; build-in for gki 2023/3/17 wangshuaishuai start
+//#ifdef CONFIG_DETECT_HUNG_TASK
 void reset_hung_task_detector(void);
-#else
-static inline void reset_hung_task_detector(void) { }
-#endif
-
+//#else
+//static inline void reset_hung_task_detector(void) { }
+//#endif
+//odm alm_id:5321993 struk to reboot function ; build-in for gki 2023/3/17 wangshuaishuai end
 /*
  * The run state of the lockup detectors is controlled by the content of the
  * 'watchdog_enabled' variable. Each lockup detector has its dedicated bit -
@@ -121,6 +121,8 @@ void watchdog_nmi_start(void);
 int watchdog_nmi_probe(void);
 int watchdog_nmi_enable(unsigned int cpu);
 void watchdog_nmi_disable(unsigned int cpu);
+
+void lockup_detector_reconfigure(void);
 
 /**
  * touch_nmi_watchdog - restart NMI watchdog timeout.
@@ -195,7 +197,7 @@ u64 hw_nmi_get_sample_period(int watchdog_thresh);
 #endif
 
 #if defined(CONFIG_HARDLOCKUP_CHECK_TIMESTAMP) && \
-    defined(CONFIG_HARDLOCKUP_DETECTOR)
+    defined(CONFIG_HARDLOCKUP_DETECTOR_PERF)
 void watchdog_update_hrtimer_threshold(u64 period);
 #else
 static inline void watchdog_update_hrtimer_threshold(u64 period) { }

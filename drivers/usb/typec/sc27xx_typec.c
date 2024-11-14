@@ -19,7 +19,9 @@
 #include <linux/of_gpio.h>
 #include <linux/gpio/consumer.h>
 #include <linux/extcon-provider.h>
-
+#include <linux/usb/tcpm.h>
+#include <linux/iio/consumer.h>
+#include <linux/workqueue.h>
 /* registers definitions for controller REGS_TYPEC */
 #define SC27XX_EN			0x00
 #define SC27XX_MODE			0x04
@@ -30,6 +32,7 @@
 #define SC27XX_STATUS			0x1c
 #define SC27XX_TCCDE_CNT		0x20
 #define SC27XX_RTRIM			0x3c
+#define SC2730_DBG1			0x60
 
 /* SC27XX_TYPEC_EN */
 #define SC27XX_TYPEC_USB20_ONLY		BIT(4)
@@ -62,7 +65,7 @@
 #define UMP9620_EFUSE_CC1_SHIFT		1
 #define UMP9620_EFUSE_CC2_SHIFT		11
 
-#define SC27XX_CC1_MASK(n)		GENMASK((n) + 9, (n) + 5)
+#define SC27XX_CC1_MASK(n)		GENMASK((n) + 4, (n))
 #define SC27XX_CC2_MASK(n)		GENMASK((n) + 4, (n))
 #define SC27XX_CC_SHIFT(n)		(n)
 
@@ -87,6 +90,23 @@
 #define SC27XX_VCONN_LDO_EN		BIT(13)
 #define SC27XX_VCONN_LDO_RDY		BIT(12)
 
+/* 9620 typec ate current too larger */
+#define UMP9620_RESERVERED_CORE		0x234c
+#define TRIM_CURRENT_FROMEFUSE		BIT(4)
+
+/* pmic name string */
+#define SC2721		0x01
+#define SC2730		0x02
+#define UMP9620		0x03
+
+/* SC2730_DBG1 */
+#define SC2730_CC1_DFP_CHECK		BIT(7)
+#define SC2730_CC2_DFP_CHECK		BIT(3)
+#define SC2730_CC1_UFP_CON		BIT(0)
+#define SC2730_CC_INSERT		GENMASK(7, 0)
+
+#define BIT_TYPEC_CC_V2AD_EN		BIT(15)
+#define CC_VOLT_LIMIT			4000 //CC short to vbus thershold
 enum sc27xx_typec_connection_state {
 	SC27XX_DETACHED_SNK,
 	SC27XX_ATTACHWAIT_SNK,
@@ -171,14 +191,89 @@ struct sc27xx_typec {
 	struct typec_partner *partner;
 	struct typec_capability typec_cap;
 	const struct sprd_typec_variant_data *var_data;
+	struct iio_channel	*cc1;
+	struct iio_channel	*cc2;
+	struct delayed_work		irq_enable_work;
 };
 
+bool sc27xx_typec_cc1_cc2_voltage_detect(struct sc27xx_typec *sc)
+{
+	bool flag = false;
+	int cc1_voltage, cc2_voltage;
+	int cnt = 20;
+
+	if (IS_ERR_OR_NULL(sc->cc1) || IS_ERR_OR_NULL(sc->cc2))
+		return flag;
+
+	regmap_update_bits(sc->regmap,
+		sc->base + SC27XX_MODE,
+		BIT_TYPEC_CC_V2AD_EN,
+		BIT_TYPEC_CC_V2AD_EN);
+
+	msleep(300);
+
+	do {
+		iio_read_channel_processed(sc->cc1, &cc1_voltage);
+		iio_read_channel_processed(sc->cc2, &cc2_voltage);
+		cc1_voltage *= 2;
+		cc2_voltage *= 2;
+		if (cc1_voltage >= CC_VOLT_LIMIT ||
+			cc2_voltage >= CC_VOLT_LIMIT) {
+			flag = true;
+			pr_info("[CCS] true cc1_voltage = %d cc2_voltage = %d\n",cc1_voltage,cc2_voltage);
+			break;
+		}
+			cnt--;
+	} while (cnt > 0);
+
+	regmap_update_bits(sc->regmap,
+		sc->base + SC27XX_MODE,
+		BIT_TYPEC_CC_V2AD_EN, 0);
+	/*pr_info("[CCS] test cc1_voltage = %d cc2_voltage = %d\n",cc1_voltage,cc2_voltage);*/
+	return flag;
+}
+EXPORT_SYMBOL_GPL(sc27xx_typec_cc1_cc2_voltage_detect);
+
+int force_set_typec_mode(struct sc27xx_typec *sc, const char *str)
+{
+	int val, ret;
+
+	ret = regmap_read(sc->regmap, sc->base + SC27XX_MODE, &val);
+	dev_dbg(sc->dev, "before write, SC27XX_MODE = 0x%x\n", val);
+	if (ret)
+		return ret;
+
+	val &= ~SC27XX_MODE_MASK;
+	if (strcmp(str, "OTG_ON"))
+		val |= SC27XX_MODE_DRP;
+	else if (strcmp(str, "OTG_OFF"))
+		val |= SC27XX_MODE_SNK;
+	else
+		return 0;
+
+	ret = regmap_write(sc->regmap, sc->base + SC27XX_MODE, val);
+	if (ret)
+		return ret;
+
+	regmap_read(sc->regmap, sc->base + SC27XX_MODE, &val);
+	dev_dbg(sc->dev, "after write  SC27XX_MODE = 0x%x\n", val);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(force_set_typec_mode);
+volatile struct sc27xx_typec *psc = NULL;
+int g_cc_polarity = 0;
+EXPORT_SYMBOL_GPL(psc);
+EXPORT_SYMBOL_GPL(g_cc_polarity);
 static int sc27xx_typec_connect(struct sc27xx_typec *sc, u32 status)
 {
 	enum typec_data_role data_role = TYPEC_DEVICE;
 	enum typec_role power_role = TYPEC_SOURCE;
 	enum typec_role vconn_role = TYPEC_SOURCE;
 	struct typec_partner_desc desc;
+	enum typec_cc_polarity cc_polarity;
+	u32 val, tmp1, tmp2;
+	int ret;
 
 	if (sc->partner)
 		return 0;
@@ -233,6 +328,44 @@ static int sc27xx_typec_connect(struct sc27xx_typec *sc, u32 status)
 		break;
 	}
 
+	ret = regmap_read(sc->regmap, sc->base + SC2730_DBG1, &val);
+	if (ret < 0) {
+		dev_err(sc->dev, "failed to read DBG1 register.\n");
+		return ret;
+	}
+
+	val &= SC2730_CC_INSERT;
+	tmp1 = val & SC2730_CC1_DFP_CHECK;
+	tmp2 = val & SC2730_CC2_DFP_CHECK;
+
+	if (tmp1 || tmp2) {
+		/* DFP MODE */
+		if (tmp1)
+			cc_polarity = TYPEC_POLARITY_CC1;
+		else
+			cc_polarity = TYPEC_POLARITY_CC2;
+	} else {
+		/* UFP MODE */
+		if (val & SC2730_CC1_UFP_CON)
+			cc_polarity = TYPEC_POLARITY_CC1;
+		else
+			cc_polarity = TYPEC_POLARITY_CC2;
+	}
+
+	if (!val || val == SC2730_CC_INSERT)
+		g_cc_polarity = 0;
+
+	switch (cc_polarity) {
+	case TYPEC_POLARITY_CC1:
+		g_cc_polarity = 1;
+		break;
+	case TYPEC_POLARITY_CC2:
+		g_cc_polarity = 2;
+		break;
+	default:
+		g_cc_polarity = 0;
+		break;
+	}
 	return 0;
 }
 
@@ -259,6 +392,7 @@ static void sc27xx_typec_disconnect(struct sc27xx_typec *sc, u32 status)
 	default:
 		break;
 	}
+	g_cc_polarity = 0;
 }
 
 #if 0
@@ -376,6 +510,41 @@ static int sc27xx_typec_enable(struct sc27xx_typec *sc)
 	return regmap_write(sc->regmap, sc->base + sc->var_data->int_en, val);
 }
 
+int sc27xx_typec_set_sink(struct sc27xx_typec *sc){
+	int ret;
+	u32 val;
+
+	ret = regmap_read(sc->regmap, sc->base + sc->var_data->mode, &val);
+	if (ret)
+		return ret;
+
+	val &= ~SC27XX_MODE_MASK;
+	val |= SC27XX_MODE_SNK;
+
+	ret = regmap_write(sc->regmap, sc->base + sc->var_data->mode, val);
+	if (ret){
+		printk("sc27xx typec set sink fail\n");
+		return ret;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(sc27xx_typec_set_sink);
+
+int sc27xx_typec_set_enable(struct sc27xx_typec *sc){
+	int ret;
+
+	ret = sc27xx_typec_enable(sc);
+	if (ret){
+		printk("sc27xx typec enable fail\n");
+		return ret;
+		}
+
+	return 0;
+}
+
+EXPORT_SYMBOL_GPL(sc27xx_typec_set_enable);
+
 static const u32 sc27xx_typec_cable[] = {
 	EXTCON_USB,
 	EXTCON_USB_HOST,
@@ -449,6 +618,33 @@ static int typec_set_rtrim(struct sc27xx_typec *sc)
 	rtrim = calib_cc1 | calib_cc2<<5;
 
 	return regmap_write(sc->regmap, sc->base + SC27XX_RTRIM, rtrim);
+}
+
+static void typec_irq_enable_work(struct work_struct *work)
+{
+	struct sc27xx_typec *sc = container_of(work,
+				 struct sc27xx_typec, irq_enable_work.work);
+	int ret;
+
+	pr_err("typec_irq_enable_work\n");
+
+	ret = devm_request_threaded_irq(sc->dev, sc->irq, NULL,
+					sc27xx_typec_interrupt,
+					IRQF_EARLY_RESUME | IRQF_ONESHOT,
+					dev_name(sc->dev), sc);
+	if (ret) {
+		dev_err(sc->dev, "failed to request irq %d\n", ret);
+		goto error;
+	}
+
+	ret = sc27xx_typec_enable(sc);
+	if (ret)
+		goto error;
+
+	return;
+
+	error:
+	typec_unregister_port(sc->port);
 }
 
 static int sc27xx_typec_probe(struct platform_device *pdev)
@@ -548,6 +744,24 @@ static int sc27xx_typec_probe(struct platform_device *pdev)
 		goto error;
 	}
 
+	if (of_property_read_bool(pdev->dev.of_node,"cc-to-vbus")) {
+		sc->cc1 = devm_iio_channel_get(dev, "cc1");
+		if (IS_ERR_OR_NULL(sc->cc1)) {
+			ret = PTR_ERR(sc->cc1);
+			dev_err(dev, "CC1 channel not found %d\n",ret);
+			return ret;
+		}
+
+		sc->cc2 = devm_iio_channel_get(dev, "cc2");
+		if (IS_ERR_OR_NULL(sc->cc2)) {
+			ret = PTR_ERR(sc->cc2);
+			dev_err(dev, "CC2 channel not found %d\n",ret);
+			return ret;
+		}
+	}
+
+	psc = sc;
+#if 0
 	ret = devm_request_threaded_irq(sc->dev, sc->irq, NULL,
 					sc27xx_typec_interrupt,
 					IRQF_EARLY_RESUME | IRQF_ONESHOT,
@@ -560,8 +774,12 @@ static int sc27xx_typec_probe(struct platform_device *pdev)
 	ret = sc27xx_typec_enable(sc);
 	if (ret)
 		goto error;
+#endif
+	INIT_DELAYED_WORK(&sc->irq_enable_work, typec_irq_enable_work);
 
 	platform_set_drvdata(pdev, sc);
+	schedule_delayed_work(&sc->irq_enable_work,
+				(HZ * 1));
 	return 0;
 
 error:

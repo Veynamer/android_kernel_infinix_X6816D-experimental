@@ -1219,7 +1219,7 @@ static ssize_t supported_accessory_modes_show(struct device *dev,
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(port->cap->accessory); i++) {
-		if (port->cap->accessory[i])
+		if (port->cap->accessory[i] && (port->cap->accessory[i] < TYPEC_MAX_ACCESSORY))
 			ret += sprintf(buf + ret, "%s ",
 			       typec_accessory_modes[port->cap->accessory[i]]);
 	}
@@ -1391,6 +1391,7 @@ void typec_set_pwr_opmode(struct typec_port *port,
 			partner->usb_pd = 1;
 			sysfs_notify(&partner_dev->kobj, NULL,
 				     "supports_usb_power_delivery");
+			kobject_uevent(&partner_dev->kobj, KOBJ_CHANGE);
 		}
 		put_device(partner_dev);
 	}

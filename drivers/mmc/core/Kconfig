@@ -89,10 +89,3 @@ config MMC_CRYPTO
 	  Enabling this makes it possible for the kernel to use the crypto
 	  capabilities of the MMC device (if present) to perform crypto
 	  operations on data being transferred to/from the device.
-
-config MMC_WRITE_PROTECT
-    tristate "mmc write protect function"
-    default y
-    help
-	  say y here to enable the mmc write protect funciton support.
-	  should say y or m here.

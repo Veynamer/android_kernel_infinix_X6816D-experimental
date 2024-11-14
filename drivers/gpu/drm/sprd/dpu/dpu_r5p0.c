@@ -138,7 +138,7 @@
 #define REG_TOP_CORNER_LUT_ADDR		0x504
 #define REG_TOP_CORNER_LUT_WDATA	0x508
 #define REG_BOT_CORNER_LUT_ADDR		0x510
-#define REG_BOT_CORNER_LUT_WDATA	0x514
+#define REG_BOT_CORNER_LUT_WDATA	0x518
 
 /* mmu config registers */
 #define REG_DPU_MMU_EN			0x804
@@ -200,8 +200,8 @@
 #define BIT_TOP_CORNER_EN		BIT(0)
 #define BIT_BOT_CORNER_EN		BIT(16)
 
-/* scaling config bits */
-#define BIT_DPU_SCALING_EN		BIT(0)
+/* enhance config bits */
+#define BIT_DPU_ENHANCE_EN		BIT(0)
 
 /* mmu interrupt bits */
 #define BIT_DPU_INT_MMU_PAOR_WR_MASK	BIT(7)
@@ -266,6 +266,11 @@ struct dpu_cfg1 {
 	u8 arqos_high;
 	u8 awqos_low;
 	u8 awqos_high;
+};
+
+struct scale_cfg {
+	u32 in_w;
+	u32 in_h;
 };
 
 struct hsv_entry {
@@ -377,6 +382,11 @@ struct dpu_enhance {
 	int cabc_state;
 	int frame_no;
 	bool cabc_bl_set;
+	bool mode_changed;
+	bool need_scale;
+	u8 skip_layer_index;
+
+	struct scale_cfg scale_copy;
 	struct hsv_lut hsv_copy;
 	struct cm_cfg cm_copy;
 	struct ltm_cfg ltm_copy;
@@ -389,19 +399,19 @@ struct dpu_enhance {
 };
 
 static struct dpu_cfg1 qos_cfg = {
-	.arqos_low = 0xc,
-	.arqos_high = 0xd,
-	.awqos_low = 0xa,
-	.awqos_high = 0xa,
+	.arqos_low = 0x1,
+	.arqos_high = 0x7,
+	.awqos_low = 0x1,
+	.awqos_high = 0x7,
 };
 
+extern u32 flag_start_frame_rate;
 static void dpu_sr_config(struct dpu_context *ctx);
 static void dpu_clean_all(struct dpu_context *ctx);
 static void dpu_layer(struct dpu_context *ctx,
 		struct sprd_layer_state *hwlayer);
 static void dpu_enhance_reload(struct dpu_context *ctx);
 static int dpu_cabc_trigger(struct dpu_context *ctx);
-
 static void dpu_version(struct dpu_context *ctx)
 {
 	ctx->version = "dpu-r5p0";
@@ -556,18 +566,12 @@ static u32 dpu_isr(struct dpu_context *ctx)
 
 	/* dpu update done isr */
 	if (reg_val & BIT_DPU_INT_UPDATE_DONE) {
-		/* dpu dvfs feature */
-		tasklet_schedule(&ctx->dvfs_task);
-
 		ctx->evt_update = true;
 		wake_up_interruptible_all(&ctx->wait_queue);
 	}
 
 	/* dpu vsync isr */
 	if (reg_val & BIT_DPU_INT_VSYNC) {
-		/* write back feature */
-		if ((ctx->vsync_count == ctx->max_vsync_count) && ctx->wb_en)
-			schedule_work(&ctx->wb_work);
 
 		/* cabc update backlight */
 		if (enhance->cabc_bl_set)
@@ -670,7 +674,7 @@ static int dpu_wait_update_done(struct dpu_context *ctx)
 
 static void dpu_stop(struct dpu_context *ctx)
 {
-	if (ctx->if_type == SPRD_DPU_IF_DPI)
+	//if (ctx->if_type == SPRD_DPU_IF_DPI)
 		DPU_REG_SET(ctx->base + REG_DPU_CTRL, BIT_DPU_STOP);
 
 	dpu_wait_stop_done(ctx);
@@ -855,7 +859,7 @@ static int dpu_write_back_config(struct dpu_context *ctx)
 	ctx->wb_layer.format = DRM_FORMAT_ABGR8888;
 	ctx->wb_layer.addr[0] = ctx->wb_addr_p;
 
-	ctx->max_vsync_count = 4;
+	ctx->max_vsync_count = 0;
 
 	ctx->wb_configed = true;
 
@@ -864,92 +868,10 @@ static int dpu_write_back_config(struct dpu_context *ctx)
 	return 0;
 }
 
-static void dpu_dvfs_task_func(unsigned long data)
-{
-	struct dpu_context *ctx = (struct dpu_context *)data;
-	struct sprd_layer_state layer, layers[8];
-	int i, j, max_x, max_y, min_x, min_y;
-	int layer_en, max, maxs[8], count = 0;
-	u32 dvfs_freq;
-
-	if (!ctx->enabled) {
-		pr_err("dpu is not initialized\n");
-		return;
-	}
-
-	/*
-	 * Count the current total number of active layers
-	 * and the corresponding pos_x, pos_y, size_x and size_y.
-	 */
-	for (i = 0; i < DPU_LAY_COUNT; i++) {
-		layer_en = DPU_REG_RD(ctx->base + DPU_LAY_REG(REG_LAY_CTRL, i)) & BIT(0);
-		if (layer_en) {
-			layers[count].dst_x = DPU_REG_RD(ctx->base + DPU_LAY_REG(REG_LAY_POS, i)) & 0xffff;
-			layers[count].dst_y = DPU_REG_RD(ctx->base + DPU_LAY_REG(REG_LAY_POS, i)) >> 16;
-			layers[count].dst_w = DPU_REG_RD(ctx->base + DPU_LAY_REG(REG_LAY_SIZE, i)) & 0xffff;
-			layers[count].dst_h = DPU_REG_RD(ctx->base + DPU_LAY_REG(REG_LAY_SIZE, i)) >> 16;
-			count++;
-		}
-	}
-
-	/*
-	 * Calculate the number of overlaps between each
-	 * layer with other layers, not include itself.
-	 */
-	for (i = 0; i < count; i++) {
-		layer.dst_x = layers[i].dst_x;
-		layer.dst_y = layers[i].dst_y;
-		layer.dst_w = layers[i].dst_w;
-		layer.dst_h = layers[i].dst_h;
-		maxs[i] = 1;
-
-		for (j = 0; j < count; j++) {
-			if (layer.dst_x + layer.dst_w > layers[j].dst_x &&
-				layers[j].dst_x + layers[j].dst_w > layer.dst_x &&
-				layer.dst_y + layer.dst_h > layers[j].dst_y &&
-				layers[j].dst_y + layers[j].dst_h > layer.dst_y &&
-				i != j) {
-				max_x = max(layers[i].dst_x, layers[j].dst_x);
-				max_y = max(layers[i].dst_y, layers[j].dst_y);
-				min_x = min(layers[i].dst_x + layers[i].dst_w,
-					layers[j].dst_x + layers[j].dst_w);
-				min_y = min(layers[i].dst_y + layers[i].dst_h,
-					layers[j].dst_y + layers[j].dst_h);
-
-				layer.dst_x = max_x;
-				layer.dst_y = max_y;
-				layer.dst_w = min_x - max_x;
-				layer.dst_h = min_y - max_y;
-
-				maxs[i]++;
-			}
-		}
-	}
-
-	/* take the maximum number of overlaps */
-	max = maxs[0];
-	for (i = 1; i < count; i++) {
-		if (maxs[i] > max)
-			max = maxs[i];
-	}
-
-	/*
-	 * Determine which frequency to use based on the
-	 * maximum number of overlaps.
-	 * Every IP here may be different, so need to modify it
-	 * according to the actual dpu core clock.
-	 */
-	if (max <= 3)
-		dvfs_freq = 307200000;
-	else
-		dvfs_freq = 384000000;
-
-	dpu_dvfs_notifier_call_chain(&dvfs_freq);
-}
-
 static int dpu_init(struct dpu_context *ctx)
 {
 	u32 reg_val, size;
+	u32 dvfs_freq;
 	struct dpu_enhance *enhance = ctx->enhance;
 
 	DPU_REG_WR(ctx->base + REG_BG_COLOR, 0x00);
@@ -980,6 +902,11 @@ static int dpu_init(struct dpu_context *ctx)
 	dpu_write_back_config(ctx);
 
 	enhance->frame_no = 0;
+
+	dvfs_freq = 384000000;
+
+	dpu_dvfs_notifier_call_chain(&dvfs_freq);
+
 	return 0;
 }
 
@@ -1152,6 +1079,13 @@ static u32 dpu_img_ctrl(u32 format, u32 blending, u32 compression, u32 y2r_coef,
 		reg_val |= BIT_DPU_LAY_DATA_ENDIAN_B0B1B2B3;
 		/*UV endian */
 		reg_val |= BIT_DPU_LAY_DATA_ENDIAN_B0B1B2B3;
+		break;
+	case DRM_FORMAT_YVU420:
+		reg_val |= BIT_DPU_LAY_FORMAT_YUV420_3PLANE;
+		/*Y endian */
+		reg_val |= BIT_DPU_LAY_DATA_ENDIAN_B0B1B2B3;
+		/*UV switch for YUV or RB switch for RGB888*/
+		reg_val |= BIT_DPU_LAY_RGB888_RB_SWITCH;
 		break;
 	default:
 		pr_err("error: invalid format %c%c%c%c\n", format,
@@ -1347,34 +1281,43 @@ static void dpu_layer(struct dpu_context *ctx,
 				hwlayer->src_w, hwlayer->src_h);
 }
 
-static int dpu_vrr(struct dpu_context *ctx)
+static void dpu_framerate(struct dpu_context *ctx, u8 *count)
 {
 	struct sprd_dpu *dpu = (struct sprd_dpu *)container_of(ctx,
-			struct sprd_dpu, ctx);
+							struct sprd_dpu, ctx);
+	struct dpu_enhance *enhance = ctx->enhance;
 	u32 reg_val;
 
-	if (ctx->fps_mode_changed) {
-		dpu_stop(ctx);
-		reg_val = (ctx->vm.vsync_len << 0) |
-			(ctx->vm.vback_porch << 8) |
-			(ctx->vm.vfront_porch << 20);
-		DPU_REG_WR(ctx->base + REG_DPI_V_TIMING, reg_val);
-
-		reg_val = (ctx->vm.hsync_len << 0) |
-			(ctx->vm.hback_porch << 8) |
-			(ctx->vm.hfront_porch << 20);
-		DPU_REG_WR(ctx->base + REG_DPI_H_TIMING, reg_val);
-
-		sprd_dsi_vrr_timing(dpu->dsi);
-		reg_val = DPU_REG_RD(ctx->base + REG_DPU_CTRL);
-		reg_val |= BIT(0) | BIT(4);
-		DPU_REG_WR(ctx->base + REG_DPU_CTRL, reg_val);
-		dpu_wait_update_done(ctx);
-		ctx->stopped = false;
-		ctx->fps_mode_changed = false;
+	if (ctx->stopped) {
+		pr_err("dpu is stoped\n");
+		enhance->mode_changed = false;
+		return;
 	}
 
-	return 0;
+	if(enhance->mode_changed) {
+		mutex_lock(&ctx->vrr_lock);
+		dpu_stop(ctx);
+		//Set the default startup refresh frame rate
+		//flag_start_frame_rate  0 default 1 60Mhz
+		if(flag_start_frame_rate == 1)
+		{
+			ctx->vrr_vfp = 12;
+			flag_start_frame_rate = 0;
+		}
+		pr_info("change frame rate, ctx->vrr_vfp:%d\n", ctx->vrr_vfp);
+
+		/* set dpi vertical timing */
+		reg_val = ctx->vm.vsync_len << 0 |
+			  ctx->vm.vback_porch << 8 |
+			  ctx->vm.vfront_porch << 20;
+		DPU_REG_WR(ctx->base + REG_DPI_V_TIMING, reg_val);
+
+		dpu->dsi->ctx.vm.vfront_porch = ctx->vrr_vfp;
+		dsi_hal_dpi_vfp(dpu->dsi, ctx->vrr_vfp);
+		dpu_run(ctx);
+		enhance->mode_changed = false;
+		mutex_unlock(&ctx->vrr_lock);
+	}
 }
 
 static void dpu_scaling(struct dpu_context *ctx,
@@ -1385,29 +1328,31 @@ static void dpu_scaling(struct dpu_context *ctx,
 	u16 src_h;
 	struct sprd_layer_state *layer_state;
 	struct sprd_plane_state *plane_state;
-	struct scale_config_param *scale_cfg = &ctx->scale_cfg;
+	struct dpu_enhance *enhance = ctx->enhance;
 
-	if (scale_cfg->sr_mode_changed) {
+	if ((enhance->mode_changed) && (!vrr_mode)) {
 		pr_debug("------------------------------------\n");
 		for (i = 0; i < count; i++) {
 			plane_state = to_sprd_plane_state(planes[i].base.state);
 			layer_state = &plane_state->layer;
 			pr_debug("layer[%d] : %dx%d --- (%d)\n", i,
 				layer_state->dst_w, layer_state->dst_h,
-				scale_cfg->in_w);
-			if (layer_state->dst_w != scale_cfg->in_w) {
-				scale_cfg->skip_layer_index = i;
+				enhance->scale_copy.in_w);
+			if (layer_state->dst_w != enhance->scale_copy.in_w) {
+				enhance->skip_layer_index = i;
 				break;
 			}
 		}
 
 		plane_state = to_sprd_plane_state(planes[count - 1].base.state);
 		layer_state = &plane_state->layer;
-		if  (layer_state->dst_w <= scale_cfg->in_w) {
+		if  (layer_state->dst_w <= enhance->scale_copy.in_w) {
 			dpu_sr_config(ctx);
-			scale_cfg->sr_mode_changed = false;
-			pr_info("do scaling enhace, bottom layer(%dx%d)\n",
-					layer_state->dst_w, layer_state->dst_h);
+			enhance->mode_changed = false;
+
+			pr_info("do scaling enhance: 0x%x, top layer(%dx%d)\n",
+				enhance->enhance_en, layer_state->dst_w,
+				layer_state->dst_h);
 		}
 	} else {
 		if (count == 1) {
@@ -1424,11 +1369,11 @@ static void dpu_scaling(struct dpu_context *ctx,
 			if (src_w == layer_state->dst_w
 			&& src_h == layer_state->dst_h) {
 				DPU_REG_WR(ctx->base + REG_BLEND_SIZE,
-					(scale_cfg->in_h << 16) | scale_cfg->in_w);
-				if (!scale_cfg->need_scale)
-					DPU_REG_CLR(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_SCALING_EN);
+					(enhance->scale_copy.in_h << 16) | enhance->scale_copy.in_w);
+				if (!enhance->need_scale)
+					DPU_REG_CLR(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_ENHANCE_EN);
 				else
-					DPU_REG_SET(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_SCALING_EN);
+					DPU_REG_SET(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_ENHANCE_EN);
 			} else {
 				/*
 				 * When the layer src size is not euqal to the
@@ -1445,17 +1390,17 @@ static void dpu_scaling(struct dpu_context *ctx,
 				 */
 				if (src_h == ctx->vm.vactive &&
 						src_w == ctx->vm.hactive)
-					DPU_REG_CLR(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_SCALING_EN);
+					DPU_REG_CLR(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_ENHANCE_EN);
 				else
-					DPU_REG_SET(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_SCALING_EN);
+					DPU_REG_SET(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_ENHANCE_EN);
 			}
 		} else {
-			DPU_REG_WR(ctx->base + REG_BLEND_SIZE, (scale_cfg->in_h << 16) |
-					  scale_cfg->in_w);
-			if (!scale_cfg->need_scale)
-				DPU_REG_CLR(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_SCALING_EN);
+			DPU_REG_WR(ctx->base + REG_BLEND_SIZE, (enhance->scale_copy.in_h << 16) |
+					  enhance->scale_copy.in_w);
+			if (!enhance->need_scale)
+				DPU_REG_CLR(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_ENHANCE_EN);
 			else
-				DPU_REG_SET(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_SCALING_EN);
+				DPU_REG_SET(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_ENHANCE_EN);
 		}
 	}
 }
@@ -1466,8 +1411,7 @@ static void dpu_flip(struct dpu_context *ctx, struct sprd_plane planes[], u8 cou
 	u32 reg_val, mmu_reg_val, secure_val;
 	struct sprd_plane_state *state;
 	struct sprd_layer_state *layer;
-	struct scale_config_param *scale_cfg = &ctx->scale_cfg;
-	struct sprd_dpu *dpu = container_of(ctx, struct sprd_dpu, ctx);
+	struct dpu_enhance *enhance = ctx->enhance;
 
 	ctx->vsync_count = 0;
 	if (ctx->max_vsync_count > 0 && count > 1)
@@ -1484,15 +1428,15 @@ static void dpu_flip(struct dpu_context *ctx, struct sprd_plane planes[], u8 cou
 	/* reset the bgcolor to black */
 	DPU_REG_WR(ctx->base + REG_BG_COLOR, 0x00);
 
-	/* to check if dpu need change the frame rate */
-	dpu_vrr(ctx);
-
 	/* disable all the layers */
 	dpu_clean_all(ctx);
 
+	if (vrr_mode)
+		/* to check if dpu need change the frame rate */
+		dpu_framerate(ctx, &count);
+
 	/* to check if dpu need scaling the frame for SR */
-	if (!dpu->dsi->ctx.surface_mode)
-		dpu_scaling(ctx, planes, count);
+	dpu_scaling(ctx, planes, count);
 
 	/* start configure dpu layers */
 	for (i = 0; i < count; i++) {
@@ -1500,8 +1444,8 @@ static void dpu_flip(struct dpu_context *ctx, struct sprd_plane planes[], u8 cou
 
 		state = to_sprd_plane_state(planes[i].base.state);
 
-		if (scale_cfg->skip_layer_index == i && scale_cfg->skip_layer_index) {
-			scale_cfg->skip_layer_index = 0;
+		if (enhance->skip_layer_index == i && enhance->skip_layer_index) {
+			enhance->skip_layer_index = 0;
 			break;
 		}
 
@@ -1652,9 +1596,6 @@ static int dpu_context_init(struct dpu_context *ctx)
 	INIT_WORK(&ctx->cabc_work, dpu_cabc_work_func);
 	INIT_WORK(&ctx->cabc_bl_update, dpu_cabc_bl_update_func);
 
-	tasklet_init(&ctx->dvfs_task, dpu_dvfs_task_func,
-			(unsigned long)ctx);
-
 	ctx->base_offset[0] = 0x0;
 	ctx->base_offset[1] = DPU_MAX_REG_OFFSET / 4;
 
@@ -1693,6 +1634,11 @@ static void dpu_enhance_backup(struct dpu_context *ctx, u32 id, void *param)
 		p = param;
 		enhance->enhance_en &= ~(*p);
 		pr_info("enhance module disable backup: 0x%x\n", *p);
+		break;
+	case ENHANCE_CFG_ID_SCL:
+		memcpy(&enhance->scale_copy, param, sizeof(enhance->scale_copy));
+		enhance->enhance_en |= BIT(0);
+		pr_info("enhance scaling backup\n");
 		break;
 	case ENHANCE_CFG_ID_HSV:
 		memcpy(&enhance->hsv_copy, param, sizeof(enhance->hsv_copy));
@@ -1743,6 +1689,7 @@ static void dpu_enhance_backup(struct dpu_context *ctx, u32 id, void *param)
 static void dpu_enhance_set(struct dpu_context *ctx, u32 id, void *param)
 {
 	struct dpu_enhance *enhance = ctx->enhance;
+	struct scale_cfg *scale;
 	struct cm_cfg cm;
 	struct slp_cfg *slp;
 	struct ltm_cfg *ltm;
@@ -1773,6 +1720,13 @@ static void dpu_enhance_set(struct dpu_context *ctx, u32 id, void *param)
 		p = param;
 		DPU_REG_CLR(ctx->base + REG_DPU_ENHANCE_CFG, *p);
 		pr_info("enhance module disable: 0x%x\n", *p);
+		break;
+	case ENHANCE_CFG_ID_SCL:
+		memcpy(&enhance->scale_copy, param, sizeof(enhance->scale_copy));
+		scale = &enhance->scale_copy;
+		DPU_REG_WR(ctx->base + REG_BLEND_SIZE, (scale->in_h << 16) | scale->in_w);
+		DPU_REG_SET(ctx->base + REG_DPU_ENHANCE_CFG, BIT(0));
+		pr_info("enhance scaling: %ux%u\n", scale->in_w, scale->in_h);
 		break;
 	case ENHANCE_CFG_ID_HSV:
 		memcpy(&enhance->hsv_copy, param, sizeof(enhance->hsv_copy));
@@ -1847,10 +1801,6 @@ static void dpu_enhance_set(struct dpu_context *ctx, u32 id, void *param)
 			(slp->cabc_startv << 0));
 		DPU_REG_SET(ctx->base + REG_DPU_ENHANCE_CFG, BIT(4));
 		pr_info("enhance slp set\n");
-		if (enhance->cabc_para.video_mode) {
-			enhance->enhance_en = DPU_REG_RD(ctx->base + REG_DPU_ENHANCE_CFG);
-			return;
-		}
 		break;
 	case ENHANCE_CFG_ID_GAMMA:
 		memcpy(&enhance->gamma_copy, param, sizeof(enhance->gamma_copy));
@@ -1947,6 +1897,7 @@ static void dpu_enhance_set(struct dpu_context *ctx, u32 id, void *param)
 static void dpu_enhance_get(struct dpu_context *ctx, u32 id, void *param)
 {
 	struct dpu_enhance *enhance = ctx->enhance;
+	struct scale_cfg *scale;
 	struct epf_cfg *epf;
 	struct slp_cfg *slp;
 	struct ltm_cfg *ltm;
@@ -1961,6 +1912,13 @@ static void dpu_enhance_get(struct dpu_context *ctx, u32 id, void *param)
 		p32 = param;
 		*p32 = DPU_REG_RD(ctx->base + REG_DPU_ENHANCE_CFG);
 		pr_info("enhance module enable get\n");
+		break;
+	case ENHANCE_CFG_ID_SCL:
+		scale = param;
+		val = DPU_REG_RD(ctx->base + REG_BLEND_SIZE);
+		scale->in_w = val & 0xffff;
+		scale->in_h = val >> 16;
+		pr_info("enhance scaling get\n");
 		break;
 	case ENHANCE_CFG_ID_EPF:
 		epf = param;
@@ -2143,6 +2101,7 @@ static void dpu_enhance_get(struct dpu_context *ctx, u32 id, void *param)
 static void dpu_enhance_reload(struct dpu_context *ctx)
 {
 	struct dpu_enhance *enhance = ctx->enhance;
+	struct scale_cfg *scale;
 	struct cm_cfg *cm;
 	struct slp_cfg *slp;
 	struct ltm_cfg *ltm;
@@ -2158,6 +2117,13 @@ static void dpu_enhance_reload(struct dpu_context *ctx)
 		DPU_REG_WR(ctx->base + REG_SLP_LUT_WDATA, slp_lut[i]);
 	}
 	pr_info("enhance slp lut reload\n");
+
+	if (enhance->enhance_en & BIT(0)) {
+		scale = &enhance->scale_copy;
+		DPU_REG_WR(ctx->base + REG_BLEND_SIZE, (scale->in_h << 16) | scale->in_w);
+		pr_info("enhance scaling from %ux%u to %ux%u\n", scale->in_w,
+			scale->in_h, ctx->vm.hactive, ctx->vm.vactive);
+	}
 
 	if (enhance->enhance_en & BIT(1)) {
 		epf = &enhance->epf_copy;
@@ -2263,15 +2229,17 @@ static void dpu_enhance_reload(struct dpu_context *ctx)
 
 static void dpu_sr_config(struct dpu_context *ctx)
 {
-	struct scale_config_param *scale_cfg = &ctx->scale_cfg;
+	struct dpu_enhance *enhance = ctx->enhance;
 
 	DPU_REG_WR(ctx->base + REG_BLEND_SIZE,
-			(scale_cfg->in_h << 16) | scale_cfg->in_w);
-
-	if (scale_cfg->need_scale)
-		DPU_REG_SET(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_SCALING_EN);
-	else
-		DPU_REG_CLR(ctx->base + REG_DPU_ENHANCE_CFG, BIT_DPU_SCALING_EN);
+			(enhance->scale_copy.in_h << 16) | enhance->scale_copy.in_w);
+	if (enhance->need_scale) {
+		enhance->enhance_en |= BIT(0);
+		DPU_REG_WR(ctx->base + REG_DPU_ENHANCE_CFG, enhance->enhance_en);
+	} else {
+		enhance->enhance_en &= ~(BIT(0));
+		DPU_REG_WR(ctx->base + REG_DPU_ENHANCE_CFG, enhance->enhance_en);
+	}
 }
 
 static int dpu_cabc_trigger(struct dpu_context *ctx)
@@ -2381,46 +2349,45 @@ static int dpu_cabc_trigger(struct dpu_context *ctx)
 static int dpu_modeset(struct dpu_context *ctx,
 		struct drm_display_mode *mode)
 {
-	struct scale_config_param *scale_cfg = &ctx->scale_cfg;
-	struct sprd_dpu *dpu = container_of(ctx, struct sprd_dpu, ctx);
-	struct sprd_dsi *dsi = dpu->dsi;
-	static unsigned int now_vtotal;
-	static unsigned int now_htotal;
+	struct dpu_enhance *enhance = ctx->enhance;
+	struct sprd_dpu *dpu =
+		(struct sprd_dpu *)container_of(ctx, struct sprd_dpu, ctx);
+	struct sprd_panel *panel =
+		(struct sprd_panel *)container_of(dpu->dsi->panel, struct sprd_panel, base);
 
-	scale_cfg->in_w = mode->hdisplay;
-	scale_cfg->in_h = mode->vdisplay;
-
-	if ((mode->hdisplay != ctx->vm.hactive) ||
-		(mode->vdisplay != ctx->vm.vactive)) {
-		scale_cfg->need_scale = true;
-		scale_cfg->sr_mode_changed = true;
-	} else {
-		if (!now_htotal && !now_vtotal) {
-			now_htotal = ctx->vm.hactive + ctx->vm.hfront_porch +
-				ctx->vm.hback_porch + ctx->vm.hsync_len;
-			now_vtotal = ctx->vm.vactive + ctx->vm.vfront_porch +
-				ctx->vm.vback_porch + ctx->vm.vsync_len;
-		}
-
-		if ((mode->vtotal + mode->htotal) !=
-			(now_htotal + now_vtotal)) {
-			drm_display_mode_to_videomode(mode, &ctx->vm);
-			drm_display_mode_to_videomode(mode, &dsi->ctx.vm);
-			now_htotal = ctx->vm.hactive + ctx->vm.hfront_porch +
-				ctx->vm.hback_porch + ctx->vm.hsync_len;
-			now_vtotal = ctx->vm.vactive + ctx->vm.vfront_porch +
-				ctx->vm.vback_porch + ctx->vm.vsync_len;
-
-			ctx->fps_mode_changed = true;
-		} else {
-			scale_cfg->sr_mode_changed = true;
-		}
-
-		scale_cfg->need_scale = false;
+	enhance->scale_copy.in_w = mode->hdisplay;
+	enhance->scale_copy.in_h = mode->vdisplay;
+	
+	if (ctx->stopped) {
+		pr_err("dpu is stoped\n");
+		return -1;
 	}
 
-	ctx->wb_size_changed = true;
-	pr_info("begin switch to %u x %u\n", mode->hdisplay, mode->vdisplay);
+	if (ctx->stopped) {
+		pr_err("dpu is stopped\n");
+		return -1;
+	}
+
+	memcpy(&panel->info.curr_mode, mode, sizeof(panel->info.curr_mode));
+	if (vrr_mode) {
+		if (ctx->vrefresh == mode->vrefresh) {
+			pr_info("modeset skip same fps:%d\n", mode->vrefresh);
+			return 0;
+		}
+		ctx->vrr_vfp = mode->vsync_start - mode->vdisplay;
+		ctx->vrefresh = mode->vrefresh;
+		ctx->vm.vfront_porch = ctx->vrr_vfp;
+	} else {
+		if ((mode->hdisplay != ctx->vm.hactive) ||
+			(mode->vdisplay != ctx->vm.vactive))
+			enhance->need_scale = true;
+		else
+			enhance->need_scale = false;
+	}
+
+	enhance->mode_changed = true;
+	pr_info("Switch to %dx%d @ %dfps\n",
+			mode->hdisplay, mode->vdisplay, mode->vrefresh);
 
 	return 0;
 }
@@ -2433,7 +2400,7 @@ static const u32 primary_fmts[] = {
 	DRM_FORMAT_RGB565, DRM_FORMAT_BGR565,
 	DRM_FORMAT_NV12, DRM_FORMAT_NV21,
 	DRM_FORMAT_NV16, DRM_FORMAT_NV61,
-	DRM_FORMAT_YUV420,
+	DRM_FORMAT_YUV420, DRM_FORMAT_YVU420,
 };
 
 static void dpu_capability(struct dpu_context *ctx,

@@ -522,5 +522,6 @@ source "drivers/misc/cxl/Kconfig"
 source "drivers/misc/ocxl/Kconfig"
 source "drivers/misc/cardreader/Kconfig"
 source "drivers/misc/habanalabs/Kconfig"
-source "drivers/misc/hwinfo/Kconfig"
+source "drivers/misc/hqhardwareinfo/Kconfig"
+source "drivers/misc/device_info/Kconfig"
 endmenu

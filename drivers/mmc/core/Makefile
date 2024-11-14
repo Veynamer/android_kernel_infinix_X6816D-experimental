@@ -19,6 +19,3 @@ mmc_block-objs			:= block.o queue.o
 obj-$(CONFIG_MMC_TEST)		+= mmc_test.o
 obj-$(CONFIG_SDIO_UART)		+= sdio_uart.o
 mmc_core-$(CONFIG_MMC_CRYPTO)	+= crypto.o
-#NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 begin
-obj-$(CONFIG_MMC_WRITE_PROTECT) += emmc_write_protect.o
-#NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 end

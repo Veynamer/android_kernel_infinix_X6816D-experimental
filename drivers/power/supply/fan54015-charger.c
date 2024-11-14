@@ -24,7 +24,6 @@
 #include <linux/slab.h>
 #include <linux/usb/phy.h>
 #include <uapi/linux/usb/charger.h>
-#include <linux/gpio.h>//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger 2022-10-14
 
 #define FAN54015_REG_0					0x0
 #define FAN54015_REG_1					0x1
@@ -156,69 +155,7 @@ static int fan54015_write(struct fan54015_charger_info *info, u8 reg, u8 data)
 {
 	return i2c_smbus_write_byte_data(info->client, reg, data);
 }
-//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger begin 2022-10-14
-static void fan54015_dump_registers(struct fan54015_charger_info *info)
-{
-	int ret;
-	u8 v;
 
-	dev_info(info->dev, "%s\n", __func__);
-	ret = fan54015_read(info, FAN54015_REG_0, &v);
-	if (ret){
-		dev_err(info->dev, "read FAN54015_REG_0 failed\n");
-	}
-	
-	dev_info(info->dev, "%s 0x%x = 0x%x\n",__func__, FAN54015_REG_0, v);
-	ret = fan54015_read(info, FAN54015_REG_1, &v);
-	if (ret){
-		dev_err(info->dev, "read FAN54015_REG_1 failed\n");
-	}
-	
-	dev_info(info->dev, "%s 0x%x = 0x%x\n",__func__, FAN54015_REG_1, v);
-	ret = fan54015_read(info, FAN54015_REG_2, &v);
-	if (ret){
-		dev_err(info->dev, "read FAN54015_REG_2 failed\n");
-	}
-	
-	dev_info(info->dev, "%s 0x%x = 0x%x\n",__func__, FAN54015_REG_2, v);
-	ret = fan54015_read(info, FAN54015_REG_3, &v);
-	if (ret){
-		dev_err(info->dev, "read FAN54015_REG_3 failed\n");
-	}
-	
-	dev_info(info->dev, "%s 0x%x = 0x%x\n",__func__, FAN54015_REG_3, v);
-	ret = fan54015_read(info, FAN54015_REG_4, &v);
-	if (ret){
-		dev_err(info->dev, "read FAN54015_REG_4 failed\n");
-	}
-	
-	dev_info(info->dev, "%s 0x%x = 0x%x\n",__func__, FAN54015_REG_4, v);
-	ret = fan54015_read(info, FAN54015_REG_5, &v);
-	if (ret){
-		dev_err(info->dev, "read FAN54015_REG_5 failed\n");
-	}
-	
-	dev_info(info->dev, "%s 0x%x = 0x%x\n",__func__, FAN54015_REG_5, v);
-	ret = fan54015_read(info, FAN54015_REG_6, &v);
-	if (ret){
-		dev_err(info->dev, "read FAN54015_REG_6 failed\n");
-	}
-	
-	dev_info(info->dev, "%s 0x%x = 0x%x\n",__func__, FAN54015_REG_6, v);
-	ret = fan54015_read(info, FAN54015_REG_10, &v);
-	if (ret){
-		dev_err(info->dev, "read FAN54015_REG_10 failed\n");
-	}
-	
-	dev_info(info->dev, "%s 0x%x = 0x%x\n",__func__, FAN54015_REG_10, v);
-	ret = fan54015_read(info, 0x51, &v);
-	if (ret){
-		dev_err(info->dev, "read 0x51 failed\n");
-	}
-	
-	dev_info(info->dev, "%s 0x51 = 0x%x\n",__func__, v);
-}
-//Add by qinjinke@sagereal.com for NVA-1589 NVA-1589 Nova plus charger end 2022-10-14
 static int
 fan54015_update_bits(struct fan54015_charger_info *info, u8 reg, u8 mask, u8 data)
 {
@@ -377,17 +314,10 @@ static int fan54015_charger_hw_init(struct fan54015_charger_info *info)
 		dev_err(info->dev, "set fan54015 io level failed\n");
 		return ret;
 	}
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger begin 2022-10-14
-	ret = fan54015_update_bits(info, 0x51, GENMASK(0, 0), 0x1);//QinJinke
-	if (ret) {
-		dev_err(info->dev, "set 0x51 failed\n");
-		return ret;
-	}
-	
+
 	ret = fan54015_update_bits(info, FAN54015_REG_5,
 				   FAN54015_REG_VSP_MASK,
-				   0x2);//FAN54015_REG_VSP); //QinJinke
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger end 2022-10-14
+				   FAN54015_REG_VSP);
 	if (ret) {
 		dev_err(info->dev, "set fan54015 vsp failed\n");
 		return ret;
@@ -446,24 +376,24 @@ static void fan54015_charger_stop_charge(struct fan54015_charger_info *info)
 static int fan54015_charger_set_current(struct fan54015_charger_info *info, u32 cur)
 {
 	u8 reg_val;
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger begin 2022-10-14
-	if (cur < 1000000)
+
+	if (cur < 650000)
 		reg_val = 0x0;
-	else if (cur >= 1000000 && cur < 1200000)
+	else if (cur >= 650000 && cur < 750000)
 		reg_val = 0x1;
-	else if (cur >= 1200000 && cur <1400000)
+	else if (cur >= 750000 && cur < 850000)
 		reg_val = 0x2;
-	else if (cur >= 1400000 && cur < 1600000)
+	else if (cur >= 850000 && cur < 1050000)
 		reg_val = 0x3;
-	else if (cur >=1600000 && cur < 1800000)
+	else if (cur >= 1050000 && cur < 1150000)
 		reg_val = 0x4;
-	else if (cur >= 1800000 && cur < 2000000)
+	else if (cur >= 1150000 && cur < 1350000)
 		reg_val = 0x5;
-	else if (cur >= 2000000 && cur < 2500000)
+	else if (cur >= 1350000 && cur < 1450000)
 		reg_val = 0x6;
 	else
 		reg_val = 0x7;
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger end  2022-10-14
+
 	return fan54015_update_bits(info, FAN54015_REG_4,
 				    FAN54015_REG_CURRENT_MASK | FAN54015_REG_RESET_MASK,
 				    reg_val << FAN54015_REG_CURRENT_MASK_SHIFT);
@@ -474,8 +404,6 @@ static int fan54015_charger_get_current(struct fan54015_charger_info *info, u32 
 	u8 reg_val;
 	int ret;
 
-    fan54015_dump_registers(info);//QinJinke
-    
 	ret = fan54015_read(info, FAN54015_REG_4, &reg_val);
 	if (ret < 0)
 		return ret;
@@ -484,35 +412,33 @@ static int fan54015_charger_get_current(struct fan54015_charger_info *info, u32 
 	reg_val = reg_val >> FAN54015_REG_CURRENT_MASK_SHIFT;
 
 	switch (reg_val) {
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger begin  2022-10-14
 	case 0:
-		*cur = 1000000;
+		*cur = 550000;
 		break;
 	case 1:
-		*cur = 1200000;
+		*cur = 650000;
 		break;
 	case 2:
-		*cur = 1400000;
+		*cur = 750000;
 		break;
 	case 3:
-		*cur = 1600000;
+		*cur = 850000;
 		break;
 	case 4:
-		*cur = 1800000;
+		*cur = 1050000;
 		break;
 	case 5:
-		*cur = 2000000;
+		*cur = 1150000;
 		break;
 	case 6:
-		*cur = 2500000;
+		*cur = 1350000;
 		break;
 	case 7:
-		*cur = 3000000;
+		*cur = 1450000;
 		break;
 	default:
-		*cur = 1000000;
+		*cur = 550000;
 	}
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger end  2022-10-14
 	return 0;
 }
 
@@ -966,7 +892,6 @@ static int fan54015_charger_enable_otg(struct regulator_dev *dev)
 	 * Disable charger detection function in case
 	 * affecting the OTG timing sequence.
 	 */
-	
 	ret = regmap_update_bits(info->pmic, info->charger_detect,
 				 BIT_DP_DM_BC_ENB, BIT_DP_DM_BC_ENB);
 	if (ret) {
@@ -1111,10 +1036,7 @@ fan54015_charger_probe(struct i2c_client *client, const struct i2c_device_id *id
 	struct device_node *regmap_np;
 	struct platform_device *regmap_pdev;
 	int ret;
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger begin 2022-10-14
-	if(!gpio_get_value(255)) //QinJinke
-		return -ENODEV;
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger end 2022-10-14
+
 	if (!adapter) {
 		pr_err("%s:line%d: NULL pointer!!!\n", __func__, __LINE__);
 		return -EINVAL;

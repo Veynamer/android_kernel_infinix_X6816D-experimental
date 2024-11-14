@@ -121,10 +121,12 @@ struct sc2730_fchg_info {
 	struct usb_phy *usb_phy;
 	struct notifier_block usb_notify;
 	struct notifier_block pd_notify;
+	struct notifier_block qc2_notify;
 	struct power_supply *psy_usb;
 	struct power_supply *psy_tcpm;
 	struct delayed_work work;
 	struct work_struct pd_change_work;
+	struct work_struct qc2_change_work;
 	struct mutex lock;
 	struct completion completion;
 	struct adapter_power_cap pd_source_cap;
@@ -135,6 +137,7 @@ struct sc2730_fchg_info {
 	u32 limit;
 	bool detected;
 	bool pd_enable;
+	bool qc_enable;
 	bool sfcp_enable;
 	bool pps_enable;
 	bool pps_active;
@@ -459,6 +462,34 @@ static int sc2730_fchg_sfcp_adjust_voltage(struct sc2730_fchg_info *info,
 	return 0;
 }
 
+static int sc2730_fchg_qc_adjust_voltage(struct sc2730_fchg_info *info,
+					   u32 input_vol)
+{
+	int ret;
+	struct power_supply *psy;
+	union power_supply_propval val;
+
+	val.intval = input_vol;
+	psy = power_supply_get_by_name("sgm4154x_charger");
+	if (!psy) {
+		dev_err(info->dev, "Cannot find power supply sgm4154x_charger\n");
+		power_supply_put(psy);
+		return -ENODEV;
+	}
+
+	ret = power_supply_set_property(psy,
+				POWER_SUPPLY_PROP_VOLTAGE_MAX,
+				&val);
+	power_supply_put(psy);
+	if (ret) {
+		dev_err(info->dev,
+			"failed to set voltage up 9v\n");
+		return ret;
+	}
+
+	return 0;
+}
+
 #if IS_ENABLED(CONFIG_SPRD_TYPEC_TCPM)
 static int sc2730_get_pd_fixed_voltage_max(struct sc2730_fchg_info *info, u32 *max_vol)
 {
@@ -701,6 +732,21 @@ static int sc2730_fchg_enable_pps(struct sc2730_fchg_info *info, bool enable)
 	return 0;
 }
 
+static int sc2730_fchg_qc2_change(struct notifier_block *nb,
+				 unsigned long event, void *data)
+{
+	struct sc2730_fchg_info *info =
+		container_of(nb, struct sc2730_fchg_info, qc2_notify);
+	struct power_supply *psy = data;
+
+	if (strcmp(psy->desc->name, "sgm4154x_charger") != 0)
+		goto out;
+
+	schedule_work(&info->qc2_change_work);
+out:
+	return NOTIFY_OK;
+}
+
 static int sc2730_fchg_pd_change(struct notifier_block *nb,
 				 unsigned long event, void *data)
 {
@@ -721,6 +767,41 @@ static int sc2730_fchg_pd_change(struct notifier_block *nb,
 out:
 	return NOTIFY_OK;
 }
+
+static void sc2730_fchg_qc2_change_work(struct work_struct *data)
+{
+	struct sc2730_fchg_info *info =
+		container_of(data, struct sc2730_fchg_info, qc2_change_work);
+	struct power_supply *psy;
+	union power_supply_propval val;
+	int ret;
+
+	psy = power_supply_get_by_name("sgm4154x_charger");
+	if (!psy) {
+		dev_err(info->dev, "Cannot find power supply bq2560x_charger\n");
+		power_supply_put(psy);
+		return;
+	}
+
+	ret = power_supply_get_property(psy,
+				POWER_SUPPLY_PROP_CHARGE_TYPE,
+				&val);
+	power_supply_put(psy);
+
+	mutex_lock(&info->lock);
+
+	if (val.intval == POWER_SUPPLY_USB_TYPE_PD) {
+		info->state = POWER_SUPPLY_USB_TYPE_PD;
+		info->qc_enable = true;
+	}
+
+	mutex_unlock(&info->lock);
+
+	printk("%s,line:%d,info->qc_enable:%d\n",__func__,__LINE__,info->qc_enable);
+	if(info->qc_enable){
+		cm_notify_event(info->psy_usb, CM_EVENT_FAST_CHARGE, NULL);
+	}
+ }
 
 static void sc2730_fchg_pd_change_work(struct work_struct *data)
 {
@@ -838,6 +919,11 @@ static void sc2730_fchg_pd_change_work(struct work_struct *data)
 {
 
 }
+
+static void sc2730_fchg_qc2_change_work(struct work_struct *data)
+{
+
+}
 #endif
 
 static int sc2730_fchg_usb_get_property(struct power_supply *psy,
@@ -860,6 +946,8 @@ static int sc2730_fchg_usb_get_property(struct power_supply *psy,
 		else if (info->pps_enable)
 			sc2730_get_pps_voltage_max(info, &val->intval);
 		else if (info->sfcp_enable)
+			val->intval = FCHG_VOLTAGE_9V;
+		else if (info->qc_enable)
 			val->intval = FCHG_VOLTAGE_9V;
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
@@ -916,6 +1004,10 @@ static int sc2730_fchg_usb_set_property(struct power_supply *psy,
 			ret = sc2730_fchg_sfcp_adjust_voltage(info, val->intval);
 			if (ret)
 				dev_err(info->dev, "failed to adjust sfcp vol\n");
+		} else if (info->qc_enable) {
+			ret = sc2730_fchg_qc_adjust_voltage(info, val->intval);
+			if (ret)
+				dev_err(info->dev, "failed to adjust qc vol\n");
 		}
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
@@ -988,7 +1080,7 @@ static void sc2730_fchg_work(struct work_struct *data)
 		sc2730_fchg_disable(info);
 	} else if (!info->detected) {
 		info->detected = true;
-		if (info->pd_enable || info->pps_enable || !info->support_sfcp) {
+		if (info->pd_enable || info->qc_enable ||info->pps_enable || !info->support_sfcp) {
 			sc2730_fchg_disable(info);
 		} else if (sc2730_fchg_get_detect_status(info) ==
 		    POWER_SUPPLY_USB_TYPE_PD) {
@@ -1009,8 +1101,8 @@ static void sc2730_fchg_work(struct work_struct *data)
 
 	mutex_unlock(&info->lock);
 
-	dev_info(info->dev, "pd_enable = %d, pps_enable = %d, sfcp_enable = %d\n",
-		 info->pd_enable, info->pps_enable, info->sfcp_enable);
+	dev_info(info->dev, "pd_enable = %d, pps_enable = %d, sfcp_enable = %d, qc_enable = %d\n",
+		 info->pd_enable, info->pps_enable, info->sfcp_enable, info->qc_enable);
 }
 
 static int sc2730_fchg_probe(struct platform_device *pdev)
@@ -1035,6 +1127,7 @@ static int sc2730_fchg_probe(struct platform_device *pdev)
 
 	INIT_DELAYED_WORK(&info->work, sc2730_fchg_work);
 	INIT_WORK(&info->pd_change_work, sc2730_fchg_pd_change_work);
+	INIT_WORK(&info->qc2_change_work, sc2730_fchg_qc2_change_work);
 	init_completion(&info->completion);
 
 	info->regmap = dev_get_regmap(pdev->dev.parent, NULL);
@@ -1100,6 +1193,14 @@ static int sc2730_fchg_probe(struct platform_device *pdev)
 					pdev->name, info);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to request irq.\n");
+		usb_unregister_notifier(info->usb_phy, &info->usb_notify);
+		return ret;
+	}
+
+	info->qc2_notify.notifier_call = sc2730_fchg_qc2_change;
+	ret = power_supply_reg_notifier(&info->qc2_notify);
+	if (ret) {
+		dev_err(info->dev, "failed to register qc2 notifier:%d\n", ret);
 		usb_unregister_notifier(info->usb_phy, &info->usb_notify);
 		return ret;
 	}

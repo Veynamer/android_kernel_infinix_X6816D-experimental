@@ -29,3 +29,7 @@ obj-$(CONFIG_INPUT_MISC)	+= misc/
 obj-$(CONFIG_INPUT_APMPOWER)	+= apm-power.o
 
 obj-$(CONFIG_RMI4_CORE)		+= rmi4/
+
+obj-$(CONFIG_LCM_BIAS_VOLTAGE_ON)		+= lcd_bias/
+
+obj-y += fingerprint/
