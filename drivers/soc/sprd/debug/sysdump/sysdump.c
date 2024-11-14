@@ -15,7 +15,6 @@
 
 #include <linux/atomic.h>
 #include <asm/cacheflush.h>
-#include <linux/atomic.h>
 #include <linux/delay.h>
 #include <linux/elf.h>
 #include <linux/elfcore.h>
@@ -287,7 +286,7 @@ void sprd_debug_check_crash_key(unsigned int code, int value)
 					++loopcount, vol_pressed);
 				if (time_before(jiffies, vol_pressed + 5 * HZ)) {
 					if (loopcount == 2) {
-#ifndef CONFIG_SPRD_DEBUG
+#if (!defined CONFIG_SPRD_DEBUG && defined CONFIG_SPRD_CLOSE_CRASH_KEY)
 						if (atomic_read(&sysdump_status) == 0) {
 							pr_info("On user version and sysdump is disabled, crash key do not trigger panic.\n");
 						} else {
@@ -352,6 +351,7 @@ int minidump_save_extend_information(const char *name, unsigned long paddr_start
 		pr_err("The name is empty, invalid!!\n");
 		return -1;
 	}
+	memset(str_name, 0, SECTION_NAME_MAX);
 	memcpy(str_name, name, strlen(name));
 	for (j = 0; j < (int)strlen(str_name); j++) {
 		tmp = str_name[j];
@@ -370,11 +370,12 @@ int minidump_save_extend_information(const char *name, unsigned long paddr_start
 
 	mutex_lock(&section_mutex);
 	/* check insert repeatly and acquire total seciton num before insert new section */
+	snprintf(str_name, SECTION_NAME_MAX, "%s_%s", EXTEND_STRING, name);
 	for (i = 0; i < SECTION_NUM_MAX; i++) {
-		if (!memcmp(str_name,
-				minidump_info_g.section_info_total.section_info[i].section_name,
-				strlen(str_name))) {
+		if (!strcmp(str_name,
+				minidump_info_g.section_info_total.section_info[i].section_name)) {
 			mutex_unlock(&section_mutex);
+			pr_err("the name:%s has been used!!,please use a new name!\n", name);
 			return -1;
 		}
 		if (!strlen(minidump_info_g.section_info_total.section_info[i].section_name))
@@ -390,7 +391,7 @@ int minidump_save_extend_information(const char *name, unsigned long paddr_start
 	}
 	/* add new section in the tail of section_info */
 	extend_section = &minidump_info_g.section_info_total.section_info[index];
-	sprintf(extend_section->section_name, "%s_%s", EXTEND_STRING, name);
+	snprintf(extend_section->section_name, SECTION_NAME_MAX, "%s_%s", EXTEND_STRING, name);
 	if (vaddr_to_paddr_flag == 0) {
 		extend_section->section_start_vaddr = (unsigned long)__va(paddr_start);
 		extend_section->section_end_vaddr = (unsigned long)__va(paddr_end);
@@ -432,14 +433,13 @@ int minidump_change_extend_information(const char *name, unsigned long paddr_sta
 
 	if (strlen(name) > (SECTION_NAME_MAX - strlen(EXTEND_STRING) - 1))
 		return -1;
-
-	sprintf(str_name, "%s_%s", EXTEND_STRING, name);
+	memset(str_name, 0, SECTION_NAME_MAX);
+	snprintf(str_name, SECTION_NAME_MAX, "%s_%s", EXTEND_STRING, name);
 
 	for (i = 0; i < SECTION_NUM_MAX; i++) {
 		if (!strlen(minidump_info_g.section_info_total.section_info[i].section_name))
 			return -1;
-		if (!memcmp(minidump_info_g.section_info_total.section_info[i].section_name, str_name,
-					strlen(str_name)))
+		if (!strcmp(minidump_info_g.section_info_total.section_info[i].section_name, str_name))
 			break;
 	}
 	if (i >= SECTION_NUM_MAX)
@@ -677,7 +677,7 @@ static void sysdump_prepare_info(int enter_id, const char *reason,
 		 reason, sprd_sysdump_info->crash_key);
 	ktime_get_ts64(&ts);
 	rtc_time_to_tm(ts.tv_sec, &tm);
-	sprintf(sprd_sysdump_info->time, "%04d-%02d-%02d_%02d:%02d:%02d",
+	snprintf(sprd_sysdump_info->time, 32, "%04d-%02d-%02d_%02d:%02d:%02d",
 		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
 		tm.tm_min, tm.tm_sec);
 
@@ -738,8 +738,10 @@ static int sysdump_panic_event(struct notifier_block *self,
 	sprd_debug_save_context();
 
 #ifdef CONFIG_SPRD_SIPC
-	if (!(reason != NULL && strstr(reason, "cpcrash")))
+	if (!(reason != NULL && strstr(reason, "cpcrash"))) {
 		smsg_senddie(SIPC_ID_LTE);
+		smsg_senddie(SIPC_ID_PM_SYS);
+	}
 #endif
 
 	smp_send_stop();
@@ -1040,19 +1042,19 @@ error_pmic_node:
 
 static int set_sysdump_enable(int on)
 {
-//	unsigned int val = 0;
-
 #if 0
+	unsigned int val = 0;
+
+
 	if (!regmap) {
 		pr_err("can not %s sysdump because of regmap is NULL\n",
 			on ? "enable" : "disable");
 		return -1;
 	}
+
+	regmap_read(regmap, pmic_reg, &val);
+	pr_info("%s: get rst mode  value is = %x\n", __func__, val);
 #endif
-
-//	regmap_read(regmap, pmic_reg, &val);
-//	pr_info("%s: get rst mode  value is = %x\n", __func__, val);
-
 	if (on) {
 		pr_info("%s: enable sysdump!\n", __func__);
 //		val |= HWRST_STATUS_SYSDUMP;
@@ -1405,7 +1407,7 @@ static int ylog_buffer_init(void)
 		return -1;
 	}
 	pr_info("%s: ylog_buffer vaddr is %p\n", __func__, ylog_buffer);
-	sprintf(ylog_buffer, "%s", "This is ylog buffer. Now , it is nothing . ");
+	snprintf(ylog_buffer, YLOG_BUF_SIZE, "%s", "This is ylog buffer. Now , it is nothing . ");
 	/*here, we can add something to head to check if data is ok */
 	SetPageReserved(virt_to_page(ylog_buffer));
 	ret = misc_register(&misc_dev_ylog);

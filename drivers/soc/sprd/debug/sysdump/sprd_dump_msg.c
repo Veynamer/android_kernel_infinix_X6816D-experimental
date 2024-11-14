@@ -141,7 +141,8 @@ static void minidump_add_current_stack(void)
 #else
 	for_each_possible_cpu(cpu) {
 		scnprintf(name, MAX_NAME_LEN, "cpustack%d", cpu);
-		minidump_save_extend_information(name, 0, THREAD_SIZE);
+		if (minidump_save_extend_information(name, 0, THREAD_SIZE))
+			return;
 	}
 #endif
 	currstack_inited = 1;
@@ -231,7 +232,7 @@ static void dump_task_info(struct task_struct *task, char *status,
 	if (task == curr) {
 		SEQ_printf(sprd_rq_seq_buf, "[status: curr] pid: %d comm: %s preempt: %#llx\n",
 			task_pid_nr(task), task->comm,
-			task_thread_info(task)->preempt_count);
+			(unsigned long long)task_thread_info(task)->preempt_count);
 		return;
 	}
 
@@ -673,8 +674,10 @@ static int sprd_add_task_stats(void)
 
 err_task_save:
 	kfree(sprd_task_seq_buf);
+	sprd_task_seq_buf = NULL;
 err_task_seq:
 	kfree(sprd_task_buf);
+	sprd_task_buf = NULL;
 
 	return ret;
 }
@@ -682,7 +685,9 @@ err_task_seq:
 static void sprd_free_task_stats(void)
 {
 	kfree(sprd_task_buf);
+	sprd_task_buf = NULL;
 	kfree(sprd_task_seq_buf);
+	sprd_task_seq_buf = NULL;
 }
 
 static int sprd_add_runq_stats(void)
@@ -710,8 +715,10 @@ static int sprd_add_runq_stats(void)
 
 err_rq_save:
 	kfree(sprd_rq_seq_buf);
+	sprd_rq_seq_buf = NULL;
 err_rq_seq:
 	kfree(sprd_runq_buf);
+	sprd_runq_buf = NULL;
 
 	return ret;
 }
@@ -719,7 +726,9 @@ err_rq_seq:
 static void sprd_free_runq_stats(void)
 {
 	kfree(sprd_runq_buf);
+	sprd_runq_buf = NULL;
 	kfree(sprd_rq_seq_buf);
+	sprd_rq_seq_buf = NULL;
 }
 
 static int sprd_add_stack_regs_stats(void)
@@ -747,8 +756,10 @@ static int sprd_add_stack_regs_stats(void)
 
 err_sr_save:
 	kfree(sprd_sr_seq_buf);
+	sprd_sr_seq_buf = NULL;
 err_sr_seq:
 	kfree(sprd_stack_reg_buf);
+	sprd_stack_reg_buf = NULL;
 
 	return ret;
 }
@@ -756,7 +767,9 @@ err_sr_seq:
 static void sprd_free_stack_regs_stats(void)
 {
 	kfree(sprd_stack_reg_buf);
+	sprd_stack_reg_buf = NULL;
 	kfree(sprd_sr_seq_buf);
+	sprd_sr_seq_buf = NULL;
 }
 
 static int sprd_add_memory_stat(void)
@@ -783,15 +796,19 @@ static int sprd_add_memory_stat(void)
 
 err_save:
 	kfree(sprd_mem_seq_buf);
+	sprd_mem_seq_buf = NULL;
 err_mem_seq:
 	kfree(sprd_meminfo_buf);
+	sprd_meminfo_buf = NULL;
 
 	return ret;
 }
 static void sprd_free_memory_stat(void)
 {
 	kfree(sprd_meminfo_buf);
+	sprd_meminfo_buf = NULL;
 	kfree(sprd_mem_seq_buf);
+	sprd_mem_seq_buf = NULL;
 }
 
 void sprd_dump_mem_stat(void)
@@ -836,15 +853,19 @@ static int sprd_add_interrupt_stat(void)
 
 err_save:
 	kfree(sprd_irqstat_seq_buf);
+	sprd_irqstat_seq_buf = NULL;
 err_irqstat_seq:
 	kfree(sprd_irqstat_buf);
+	sprd_irqstat_buf = NULL;
 
 	return ret;
 }
 static void sprd_free_interrupt_stat(void)
 {
 	kfree(sprd_irqstat_buf);
+	sprd_irqstat_buf = NULL;
 	kfree(sprd_irqstat_seq_buf);
+	sprd_irqstat_seq_buf = NULL;
 }
 
 static int sprd_kmsg_panic_event(struct notifier_block *self,

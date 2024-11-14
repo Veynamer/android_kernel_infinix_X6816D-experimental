@@ -24,3 +24,11 @@ config SPRD_NATIVE_HANG_MONITOR
 	help
 		This option enables Spreatrum android native hang detect which prepare debug info
 		for the case to debug.
+
+config SPRD_CLOSE_CRASH_KEY
+	bool "Disable crash_key trigger kernel panic"
+	depends on SPRD_SYSDUMP
+	default n
+	help
+		This option disables Spreatrum crash_key which tigger kernel panic
+		to debug.
