@@ -18,7 +18,6 @@
 #include "wcn_procfs.h"
 #include "../include/wcn_dbg.h"
 #include "wcn_ca_trusty.h"
-#include "../sipc/wcn_sipc.h"
 #define GNSS_CALI_DONE_FLAG (0x1314520)
 
 static struct mutex marlin_lock;
@@ -33,7 +32,6 @@ static char firmware_file_path[FIRMWARE_FILEPATHNAME_LENGTH_MAX];
 char gnss_firmware_path[FIRMWARE_FILEPATHNAME_LENGTH_MAX];
 int is_wcn_shutdown;
 
-int ge2_bin_type;
 void wcn_boot_init(void)
 {
 	mutex_init(&marlin_lock);
@@ -419,8 +417,7 @@ static int wcn_load_firmware_data(struct wcn_device *wcn_dev)
  * for reading from the partition image.The first way
  * to use the first.
  */
-#define GAL_BIN_SIZE 0x57800
-#define GNSS_COMBINE_FIRMWARE 0x100000
+#define WCN_WFBT_LOAD_FIRMWARE_OFFSET 0x180000
 static int wcn_download_image(struct wcn_device *wcn_dev)
 {
 	const struct firmware *firmware;
@@ -477,31 +474,26 @@ static int wcn_download_image(struct wcn_device *wcn_dev)
 #endif
 	} else {
 		WCN_INFO("image size = %d\n", (int)firmware->size);
-		/*check is 2to1 bin*/
-		if (wcn_check_2to1_bin(wcn_dev, firmware, &off) == 2) {
+		if (wcn_get_aon_chip_id() == WCN_SHARKL3_CHIP_22NM) {
+			if (wcn_dev_is_gnss(wcn_dev) == 0) {
+				off = WCN_WFBT_LOAD_FIRMWARE_OFFSET;
+				WCN_INFO("btwf bin --------\r\n");
+			} else {
+				WCN_INFO("gnss bin--------\r\n");
+			}
+		}
+		if ((wcn_get_aon_chip_type() == 1) && (wcn_dev_is_gnss(wcn_dev) == 0)) {
+			WCN_INFO("is sharkl3\n");
 			if (wcn_write_data_to_phy_addr(wcn_dev->base_addr,
 					(void *)(firmware->data + off),
 						wcn_dev->file_length)) {
-			WCN_ERR("L3 wcn_btwf_mem_ram_vmap_nocache fail\n");
-			release_firmware(firmware);
-			return -ENOMEM;
-			}
-		} else if (wcn_check_2to1_bin(wcn_dev, firmware, &off) == 1) {
-			if (firmware->size != GNSS_COMBINE_FIRMWARE) {
-				/* force assert */
-				wcn_assert_interface(1, "gnss bin codesize error");
-				return -1;
-			}
-			if (wcn_write_data_to_phy_addr(wcn_dev->base_addr,
-					(void *)(firmware->data + off),
-						GAL_BIN_SIZE)) {
-			WCN_ERR("L3 wcn_gnss_mem_ram_vmap_nocache fail\n");
+			WCN_ERR("wcn_mem_ram_vmap_nocache fail\n");
 			release_firmware(firmware);
 			return -ENOMEM;
 			}
 		} else {
 			if (wcn_write_data_to_phy_addr(wcn_dev->base_addr,
-					(void *)firmware->data,
+					(void *)(firmware->data + off),
 						firmware->size)) {
 			WCN_ERR("wcn_mem_ram_vmap_nocache fail\n");
 			release_firmware(firmware);
@@ -2238,7 +2230,7 @@ int btwf_sys_shutdown(struct wcn_device *wcn_dev)
 			btwf_force_shutdown_aontop(wcn_dev);
 		}
 	}
-	wcn_sipc_chn_set_status_all_false();
+
 	/*
 	 * Set SYS,CPU,Cache at reset status
 	 * to avoid after BTWF SYS power on, the CPU runs auto
@@ -2363,7 +2355,7 @@ int gnss_sys_shutdown(struct wcn_device *wcn_dev)
 			  reg_val);
 
 	/* workround1 use after chip eco D-die sys dosen't sleep*/
-	wcn_ip_allow_sleep(wcn_dev, true);
+	//wcn_ip_allow_sleep(wcn_dev, true);
 	return 0;
 }
 
@@ -2972,7 +2964,6 @@ int wcn_proc_native_start(void *arg)
 int wcn_proc_native_stop(void *arg)
 {
 	struct wcn_device *wcn_dev = arg;
-	bool is_marlin;
 	u32 iloop_index;
 	u32 reg_nr = 0;
 	unsigned int val;
@@ -2985,7 +2976,6 @@ int wcn_proc_native_stop(void *arg)
 	if (!wcn_dev)
 		return -EINVAL;
 
-	is_marlin = wcn_dev_is_marlin(wcn_dev);
 	reg_nr = wcn_dev->reg_shutdown_nr < REG_SHUTDOWN_CNT_MAX ?
 		wcn_dev->reg_shutdown_nr : REG_SHUTDOWN_CNT_MAX;
 	for (iloop_index = 0; iloop_index < reg_nr; iloop_index++) {
@@ -3016,11 +3006,7 @@ int wcn_proc_native_stop(void *arg)
 		WCN_INFO("ctrl_reg[%d] = 0x%x, val=0x%x\n",
 			 iloop_index, reg_read, val);
 	}
-#ifdef CONFIG_SC2342_I
-	if (!is_marlin)
-		/*delay for frequent gnss reset*/
-		msleep(20);
-#endif
+
 	return 0;
 }
 
@@ -3116,8 +3102,7 @@ static struct wcn_device *wcn_get_dev_by_type(u32 subsys_bit)
 	if (subsys_bit & WCN_MARLIN_MASK)
 		return s_wcn_device.btwf_device;
 	else if ((subsys_bit & WCN_GNSS_MASK) ||
-		 (subsys_bit & WCN_GNSS_BD_MASK) ||
-		(subsys_bit & WCN_GNSS_GAL_MASK))
+		 (subsys_bit & WCN_GNSS_BD_MASK))
 		return s_wcn_device.gnss_device;
 
 	WCN_ERR("invalid subsys:0x%x\n", subsys_bit);
@@ -3156,7 +3141,6 @@ int start_integrate_wcn_truely(u32 subsys)
 	unsigned long ret_wait_completion = 0;
 
 	WCN_INFO("start subsys:%d\n", subsys);
-	ge2_bin_type = subsys;
 	wcn_dev = wcn_get_dev_by_type(subsys_bit);
 	if (!wcn_dev) {
 		WCN_ERR("wcn dev null!\n");

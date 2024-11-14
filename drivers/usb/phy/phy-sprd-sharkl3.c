@@ -53,8 +53,8 @@ struct sprd_hsphy {
 	atomic_t		inited;
 	bool			is_host;
 };
-//Modified by qinjinke@sagereal.com for NVA-1007 USB Voltage in pctool
-#define FULLSPEED_USB33_TUNE		2900000
+
+#define FULLSPEED_USB33_TUNE		2700000
 
 static enum usb_charger_type sc27xx_charger_detect(struct regmap *regmap)
 {
@@ -225,6 +225,11 @@ static int sprd_hsphy_init(struct usb_phy *x)
 	writel_relaxed(value, phy->base + REG_AP_AHB_OTG_PHY_CTRL);
 
 	reg = msk = MASK_ANLG_PHY_G4_ANALOG_USB20_USB20_TUNEHSAMP;
+	regmap_update_bits(phy->ana_g4,
+		REG_ANLG_PHY_G4_ANALOG_USB20_USB20_TRIMMING, msk, reg);
+		
+	reg = 0x18f64701;
+	msk = 0xffffffff;
 	regmap_update_bits(phy->ana_g4,
 		REG_ANLG_PHY_G4_ANALOG_USB20_USB20_TRIMMING, msk, reg);
 

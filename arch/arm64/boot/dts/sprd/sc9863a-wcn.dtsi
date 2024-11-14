@@ -176,11 +176,6 @@
 			compatible = "sprd,wcn_fm";
 			extcon = <&spipe_wcn>;
 			sprd,name = "sprd-fm";
-			switch-inner-ana-gpios = <&ap_gpio 55 0>;
-			sprd,lna_gpio = <55>;
-			sprd,ana_inner = <1>;
-			sprd,fm-sant = <1>;
-			ststus = "okay";
 		};
 	};
 

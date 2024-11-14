@@ -114,51 +114,6 @@ struct cmd_gscan_channel_list {
 	int channels[SPRD_TOTAL_CHAN_NR];
 };
 
-/*begain of sar scence param define*/
-struct set_sar_limit_param {
-	u32 sar_scence;
-	u8 sar_type;
-	s8 power_value;
-	u8 phy_mode;
-};
-
-/*sar scence define		*
- *scence value: 		*
- *reciver on scence   1 *
- *recive off (normal scence) scence  5 *
- *hot spot scence     3 */
-enum sar_scence_value {
-	WLAN_SAR_SCENCE_RECIVER_ON = 1,
-	WLAN_SAR_SCENCE_HOTSPOT = 3,
-	WLAN_SAR_SCENCE_RECIVER_OFF = 5,
-};
-/*end of sar scence param define*/
-
-/*the map of sar scence to parameter*/
-static struct set_sar_limit_param sar_param_map[] = {
-	{
-		/*recive on scence*/
-		WLAN_SAR_SCENCE_RECIVER_ON,
-		SPRD_SET_SAR_ABSOLUTE,
-		9,
-		SPRD_SET_SAR_ALL_MODE,
-	},
-	{
-		/*recive off scence*/
-		WLAN_SAR_SCENCE_RECIVER_OFF,
-		SPRD_SET_SAR_ABSOLUTE,
-		127,
-		SPRD_SET_SAR_ALL_MODE,
-	},
-	{
-		/*hotspot scence*/
-		WLAN_SAR_SCENCE_HOTSPOT,
-		SPRD_SET_SAR_ABSOLUTE,
-		6,
-		SPRD_SET_SAR_ALL_MODE,
-	},
-};
-
 /* Send link layer stats CMD */
 static int vendor_link_layer_stat(struct sprd_priv *priv,
 					 struct sprd_vif *vif, u8 subtype,
@@ -544,16 +499,30 @@ static int vendor_parse_sae_entry(struct sae_entry *entry,
 		case VENDOR_SAE_PASSWORD:
 			data_len = nla_len(pos);
 			entry->passwd_len = data_len;
-			nla_strlcpy(entry->password, pos, data_len + 1);
-			pr_info("entry->passwd: %s, entry->len:%d\n",
-				entry->password, entry->passwd_len);
+			if (data_len < sizeof(entry->password)) {
+				nla_strlcpy(entry->password, pos, data_len + 1);
+				pr_info("entry->passwd: %s, entry->len:%d\n",
+					entry->password, entry->passwd_len);
+			} else {
+				pr_err("entry->passwd_len(%d) is more than expected\n", data_len);
+				return -ENOEXEC;
+			}
 			break;
 		case VENDOR_SAE_IDENTIFIER:
 			data_len = nla_len(pos);
 			entry->id_len = data_len;
+			if (entry->id_len > sizeof(entry->identifier)) {
+				pr_err("invalid id_len %d\n", entry->id_len);
+				return -EINVAL;
+			}
 			nla_strlcpy(entry->identifier, pos, data_len);
 			break;
 		case VENDOR_SAE_PEER_ADDR:
+			data_len = nla_len(pos);
+			if (data_len != ETH_ALEN) {
+				pr_err("invalid peer_addr len %d\n", data_len);
+				return -EINVAL;
+			}
 			nla_memcpy(entry->peer_addr, pos, ETH_ALEN);
 			break;
 		case VENDOR_SAE_VLAN_ID:
@@ -1682,9 +1651,16 @@ static int vendor_set_bssid_hotlist(struct wiphy *wiphy,
 					type = nla_type(inner_iter);
 					switch (type) {
 					case GSCAN_ATTR_CONFIG_AP_THR_BSSID:
+						if (nla_len(inner_iter) < 6 * sizeof(unsigned char)) {
+							netdev_err(vif->ndev,
+								"nla_data for networks nla type 0x%x not support\n",
+								type);
+							ret = -EINVAL;
+						} else {
 					    memcpy(bssid_hotlist_params->ap[i].bssid,
 						   nla_data(inner_iter),
 						   6 * sizeof(unsigned char));
+						}
 					break;
 
 					case GSCAN_ATTR_CONFIG_AP_THR_RSSI_LOW:
@@ -1836,9 +1812,16 @@ static int vendor_set_significant_change(struct wiphy *wiphy,
 				type = nla_type(inner_iter);
 				switch (type) {
 				case GSCAN_ATTR_CONFIG_AP_THR_BSSID:
+					if (nla_len(inner_iter) < 6 * sizeof(unsigned char)) {
+						netdev_err(vif->ndev,
+							"nla_data for networks nla type 0x%x not support\n",
+							type);
+						ret = -EINVAL;
+					} else {
 					memcpy(significant_change_params->ap[i].bssid,
 					       nla_data(inner_iter),
 					       6 * sizeof(unsigned char));
+					}
 				break;
 
 				case GSCAN_ATTR_CONFIG_AP_THR_RSSI_LOW:
@@ -2059,11 +2042,6 @@ static int vendor_get_support_feature(struct wiphy *wiphy,
 		pr_info("RAND MAC SCAN supported\n");
 		feature |= WIFI_FEATURE_SCAN_RAND;
 	}
-	/* bit 27: Support SET sar limit function */
-	if (priv->extend_feature & SPRD_CAPA_TX_POWER) {
-		pr_info("Set sar limit function supported\n");
-		feature |= WIFI_FEATURE_SET_SAR_LIMIT;
-	}
 
 	pr_info("Supported Feature:0x%x\n", feature);
 
@@ -2104,6 +2082,12 @@ static int vendor_set_mac_oui(struct wiphy *wiphy,
 		type = nla_type(pos);
 		switch (type) {
 		case ATTR_SET_SCANNING_MAC_OUI:
+			if (nla_len(pos) < sizeof(struct v_MACADDR_t)) {
+				netdev_err(vif->ndev, "nla_data for nla type 0x%x not support\n",
+					type);
+				ret = -EINVAL;
+				goto out;
+			}
 			memcpy(rand_mac, nla_data(pos), 3);
 			break;
 
@@ -2462,6 +2446,8 @@ static int vendor_set_roam_params(struct wiphy *wiphy,
 			pr_info("black list mac addr:%pM\n",
 				black_params.black_list[i].MAC_addr);
 			i++;
+			if (i >= MAX_BLACK_BSSID)
+				goto fail;
 		}
 		black_params.num_black_bssid = i;
 		/* send black list with roam_params CMD */
@@ -2522,10 +2508,17 @@ static int vendor_set_ssid_hotlist(struct wiphy *wiphy,
 					type = nla_type(inner_iter);
 				switch (type) {
 				case GSCAN_ATTR_CONFIG_SSID_THR_SSID:
-				memcpy(
-				ssid_hotlist_params->ssid[i].ssid,
-				nla_data(inner_iter),
-				IEEE80211_MAX_SSID_LEN * sizeof(unsigned char));
+					if (nla_len(inner_iter) >
+					    IEEE80211_MAX_SSID_LEN * sizeof(unsigned char)) {
+						netdev_err(vif->ndev,
+							   "nla_data for networks nla_type \
+							   0x%x is invalid\n", type);
+							ret = -EINVAL;
+					} else {
+						memcpy(ssid_hotlist_params->ssid[i].ssid,
+						       nla_data(inner_iter),
+						       nla_len(inner_iter));
+					}
 				break;
 
 				case GSCAN_ATTR_CONFIG_SSID_THR_RSSI_LOW:
@@ -2602,16 +2595,19 @@ static int vendor_set_passpoint_list(struct wiphy *wiphy,
 				     struct wireless_dev *wdev,
 				     const void *data, int len)
 {
-	struct nlattr *tb[GSCAN_ATTR_MAX + 1];
-	struct nlattr *tb2[GSCAN_ATTR_MAX + 1];
+	struct nlattr *tb[GSCAN_ATTR_MAX + 1] = {NULL,};
+	struct nlattr *tb2[GSCAN_ATTR_MAX + 1] = {NULL,};
 	struct nlattr *HS_list;
 	struct sprd_vif *vif = netdev_priv(wdev->netdev);
 	struct wifi_passpoint_network *HS_list_params;
 	int i = 0, rem, flush, ret = 0, tlen, hs_num;
 	struct cmd_gscan_rsp_header rsp;
 	u16 rlen = sizeof(struct cmd_gscan_rsp_header);
+	int maxtype = ARRAY_SIZE(wlan_gscan_config_policy);
 
-	if (nla_parse(tb, GSCAN_ATTR_MAX, data, len,
+	if (maxtype > GSCAN_ATTR_MAX)
+		maxtype = GSCAN_ATTR_MAX;
+	if (nla_parse(tb, maxtype, data, len,
 		      wlan_gscan_config_policy, NULL)) {
 		netdev_info(vif->ndev,
 			    "%s :Fail to parse attribute\n", __func__);
@@ -2668,7 +2664,9 @@ static int vendor_set_passpoint_list(struct wiphy *wiphy,
 
 		HS_list_params->id = nla_get_u32(tb[GSCAN_ATTR_ANQPO_HS_NETWORK_ID]);
 
-		if (!tb2[GSCAN_ATTR_ANQPO_HS_NAI_REALM]) {
+		if (!tb2[GSCAN_ATTR_ANQPO_HS_NAI_REALM] ||
+		    (nla_len(tb2[GSCAN_ATTR_ANQPO_HS_NAI_REALM]) >
+		    sizeof(HS_list_params->realm))) {
 			netdev_info(vif->ndev,
 				    "%s :Fail to parse GSCAN_ATTR_ANQPO_HS_NAI_REALM\n",
 				    __func__);
@@ -2676,9 +2674,12 @@ static int vendor_set_passpoint_list(struct wiphy *wiphy,
 			goto out;
 		}
 		memcpy(HS_list_params->realm,
-		       nla_data(tb2[GSCAN_ATTR_ANQPO_HS_NAI_REALM]), 256);
+		       nla_data(tb2[GSCAN_ATTR_ANQPO_HS_NAI_REALM]),
+		       nla_len(tb2[GSCAN_ATTR_ANQPO_HS_NAI_REALM]));
 
-		if (!tb2[GSCAN_ATTR_ANQPO_HS_ROAM_CONSORTIUM_ID]) {
+		if (!tb2[GSCAN_ATTR_ANQPO_HS_ROAM_CONSORTIUM_ID] ||
+		    (nla_len(tb2[GSCAN_ATTR_ANQPO_HS_ROAM_CONSORTIUM_ID]) >
+		    sizeof(HS_list_params->roaming_ids))) {
 			netdev_info(vif->ndev,
 				    "%s :Fail to parse GSCAN_ATTR_ANQPO_HS_ROAM_CONSORTIUM_ID\n",
 				    __func__);
@@ -2687,9 +2688,12 @@ static int vendor_set_passpoint_list(struct wiphy *wiphy,
 		}
 
 		memcpy(HS_list_params->roaming_ids,
-		       nla_data(tb2[GSCAN_ATTR_ANQPO_HS_ROAM_CONSORTIUM_ID]), 128);
+		       nla_data(tb2[GSCAN_ATTR_ANQPO_HS_ROAM_CONSORTIUM_ID]),
+		       nla_len(tb2[GSCAN_ATTR_ANQPO_HS_ROAM_CONSORTIUM_ID]));
 
-		if (!tb2[GSCAN_ATTR_ANQPO_HS_PLMN]) {
+		if (!tb2[GSCAN_ATTR_ANQPO_HS_PLMN] ||
+		    (nla_len(tb2[GSCAN_ATTR_ANQPO_HS_PLMN]) >
+		    sizeof(HS_list_params->plmn))) {
 			netdev_info(vif->ndev,
 				    "%s :Fail to parse GSCAN_ATTR_ANQPO_HS_PLMN\n",
 				    __func__);
@@ -2697,8 +2701,9 @@ static int vendor_set_passpoint_list(struct wiphy *wiphy,
 			goto out;
 		}
 
-		memcpy(HS_list_params->plmn, nla_data(tb2[GSCAN_ATTR_ANQPO_HS_PLMN]),
-		       3);
+		memcpy(HS_list_params->plmn,
+		       nla_data(tb2[GSCAN_ATTR_ANQPO_HS_PLMN]),
+		       nla_len(tb2[GSCAN_ATTR_ANQPO_HS_PLMN]));
 		i++;
 	}
 
@@ -2902,9 +2907,16 @@ static int vendor_set_epno_list(struct wiphy *wiphy,
 					type = nla_type(inner_iter);
 					switch (type) {
 					case ATTR_PNO_SET_LIST_PARAM_EPNO_NETWORK_SSID:
-						memcpy(epno_network->ssid,
-						       nla_data(inner_iter),
-						       IEEE80211_MAX_SSID_LEN);
+						if (nla_len(inner_iter) > IEEE80211_MAX_SSID_LEN) {
+							netdev_err(vif->ndev,
+								   "nla_data for networks nla_type \
+								   0x%x is invalid\n", type);
+								ret = -EINVAL;
+						} else {
+							memcpy(epno_network->ssid,
+							       nla_data(inner_iter),
+							       nla_len(inner_iter));
+						}
 						break;
 
 					case ATTR_PNO_SET_LIST_PARAM_EPNO_NETWORK_FLAGS:
@@ -2960,72 +2972,46 @@ static int vendor_set_epno_list(struct wiphy *wiphy,
 	return ret;
 }
 
-/*read sar param according to scence code*/
-/*scence code:			 *
- *reciver on scence    1 *
- *reciver off scence   5 *
- *hotspot scence       3 */
-static struct set_sar_limit_param *
-		sprd_vendor_read_sar_param(u32 sar_scence)
-{
-	int i = 0;
-	int sar_map_len = ARRAY_SIZE(sar_param_map);
-	struct set_sar_limit_param *psar_map = NULL;
-
-	for (i = 0; i < sar_map_len; i++) {
-		if (sar_scence == sar_param_map[i].sar_scence) {
-			psar_map = &sar_param_map[i];
-			break;
-		}
-	}
-	return psar_map;
-}
-
 /* set SAR limits function------CMD ID:146 */
 static int vendor_set_sar_limits(struct wiphy *wiphy,
 				 struct wireless_dev *wdev,
 				 const void *data, int len)
 {
-/**set sar param according to different scence**/
-	int ret = VENDOR_WIFI_SUCCESS;
-	struct sprd_priv *priv = wiphy_priv(wiphy);
-	struct sprd_vif *vif = container_of(wdev, struct sprd_vif, wdev);
-	struct nlattr *tb[ATTR_SAR_LIMITS_MAX + 1];
-	struct set_sar_limit_param *psar_param;
-	u32 sar_scence = 0;
-
-	pr_info("%s enter:\n", __func__);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
-	if (nla_parse(tb, ATTR_SAR_LIMITS_MAX, data, len, NULL, NULL)) {
-#else
-	if (nla_parse(tb, ATTR_SAR_LIMITS_MAX, data, len, NULL)) {
-#endif
-		pr_err("Invalid ATTR\n");
-		return -EINVAL;
-	}
-
-	if (!tb[ATTR_SAR_LIMITS_SAR_ENABLE]) {
-		pr_err("attr sar enable failed\n");
-		return -EINVAL;
-	}
-
-	sar_scence = nla_get_u32(tb[ATTR_SAR_LIMITS_SAR_ENABLE]);
-	psar_param = sprd_vendor_read_sar_param(sar_scence);
-	if (psar_param) {
-		netdev_info(vif->ndev, "%s: set sar, scence: %d, value : %d\n",
-					__func__, psar_param->sar_scence,
-					psar_param->power_value);
-		ret = sc2355_set_sar(priv, vif,
-						psar_param->sar_type,
-						psar_param->power_value);
-		if (ret)
-			pr_err("set sar value failed, result: %d", ret);
-	} else {
-		pr_err("invalid sar scence: %d\n", sar_scence);
-	}
-
-	/* To pass vts test */
-	return ret;
+	/* to pass vts */
+	return -EOPNOTSUPP;
+/* keep these code, just in case
+ *	int ret = 0;
+ *	uint32_t bdf = 0xff;
+ *	struct sprd_priv *priv = wiphy_priv(wiphy);
+ *	struct sprd_vif *vif = container_of(wdev, struct sprd_vif, wdev);
+ *	struct nlattr *tb[ATTR_SAR_LIMITS_MAX + 1];
+ *
+ *	pr_info("%s enter:\n", __func__);
+ *	if (nla_parse(tb, ATTR_SAR_LIMITS_MAX, data, len, NULL, NULL)) {
+ *		pr_err("Invalid ATTR\n");
+ *		return -EINVAL;
+ *	}
+ *
+ *	if (!tb[ATTR_SAR_LIMITS_SAR_ENABLE]) {
+ *		pr_err("attr sar enable failed\n");
+ *		return -EINVAL;
+ *	}
+ *
+ *	bdf = nla_get_u32(tb[ATTR_SAR_LIMITS_SAR_ENABLE]);
+ *	if (bdf > VENDOR_SAR_LIMITS_USER) {
+ *		pr_err("bdf value:%d exceed the max value\n", bdf);
+ *		return -EINVAL;
+ *	}
+ *
+ *	if (bdf == VENDOR_SAR_LIMITS_BDF0) {
+ *		[> set sar limits <]
+ *		ret = sprd_power_save(priv, vif, SPRD_SET_TX_POWER, bdf);
+ *	} else if (bdf == VENDOR_SAR_LIMITS_NONE) {
+ *		[> reset sar limits <]
+ *		ret = sprd_power_save(priv, vif, SPRD_SET_TX_POWER, -1);
+ *	}
+ *	return ret;
+ */
 }
 
 static int vendor_get_akm_suite(struct wiphy *wiphy,
@@ -3153,14 +3139,17 @@ static int vendor_set_sae_password(struct wiphy *wiphy,
 
 		switch (type) {
 		case VENDOR_SAE_ENTRY:
+			if (sae_entry_index >= SPRD_SAE_MAX_NUM)
+				return -EINVAL;
 			sae_para.entry[sae_entry_index].vlan_id =
 			    SPRD_SAE_NOT_SET;
 			sae_para.entry[sae_entry_index].used = 1;
-			vendor_parse_sae_entry(&sae_para.entry[sae_entry_index],
-					       nla_data(pos), nla_len(pos));
-			sae_entry_index++;
-			if (sae_entry_index >= SPRD_SAE_MAX_NUM)
+			if (vendor_parse_sae_entry(&sae_para.entry[sae_entry_index],
+					       nla_data(pos), nla_len(pos)) != 0) {
+				pr_err("%s %d error.\n", __func__, __LINE__);
 				return -EINVAL;
+			}
+			sae_entry_index++;
 			break;
 
 		case VENDOR_SAE_GROUP_ID:
@@ -3176,17 +3165,22 @@ static int vendor_set_sae_password(struct wiphy *wiphy,
 
 		case VENDOR_SAE_PWD:
 			sae_para.passphrase_len = nla_len(pos);
-			nla_strlcpy(sae_para.passphrase, pos,
-				    sae_para.passphrase_len + 1);
-			pr_info("pwd is :%s, len :%d\n", sae_para.passphrase,
-				sae_para.passphrase_len);
+			if (sae_para.passphrase_len < sizeof(sae_para.passphrase)) {
+				nla_strlcpy(sae_para.passphrase, pos,
+					    sae_para.passphrase_len + 1);
+				pr_info("pwd is :%s, len :%d\n", sae_para.passphrase,
+					sae_para.passphrase_len);
+			} else {
+				pr_err("%s %d error.\n", __func__, __LINE__);
+				return -EINVAL;
+			}
 			break;
 		default:
 			break;
 		}
 	}
 
-	para = kzalloc(512, GFP_KERNEL);
+	para = kzalloc(1024, GFP_KERNEL);
 	if (!para)
 		return -ENOMEM;
 

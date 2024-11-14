@@ -96,6 +96,7 @@ enum {
 	SPRD_CODEC_DC_OS_SWITCH_ORDER = 104,
 	SPRD_CODEC_DC_OS_ORDER = 105,
 	SPRD_CODEC_RCV_DEPOP_ORDER = 106,
+	SPRD_CODEC_HP_DALR_ORDER = 107,
 	SPRD_CODEC_MIXER_ORDER = 110,/* Must be the last one */
 };
 
@@ -252,6 +253,7 @@ struct sprd_codec_priv {
 	u16 dac_switch;
 	u16 adc_switch;
 	u32 aud_pabst_vcal;
+	u32 codec_product_info;
 	u32 neg_cp_efuse;
 	u32 fgu_4p2_efuse;
 	u32 hp_mix_mode;
@@ -433,8 +435,8 @@ static const struct snd_kcontrol_new virt_output_switch =
 static const struct snd_kcontrol_new ivsence_switch =
 	SOC_DAPM_SINGLE_VIRT("Switch", 1);
 
-static const struct snd_kcontrol_new hpr_pin_switch =
-	SOC_DAPM_SINGLE_VIRT("Switch", 1);
+//static const struct snd_kcontrol_new hpr_pin_switch =
+//	SOC_DAPM_SINGLE_VIRT("Switch", 1);
 
 static const struct snd_kcontrol_new aud_adc_switch[] = {
 	SOC_DAPM_SINGLE_VIRT("Switch", 1),
@@ -963,7 +965,10 @@ static void sprd_codec_pa_boost(struct snd_soc_component *codec, int pa_d_en)
 		value = PABST_V(0x49) | PABST_VADJ_TRIG;
 		snd_soc_component_update_bits(codec, SOC_REG(ANA_PMU6), mask, value);
 		mask = PABST_EN;
-		snd_soc_component_update_bits(codec, SOC_REG(ANA_PMU20), mask, mask);
+		if ((sprd_codec->codec_product_info & 0x20) == 0)
+			snd_soc_component_update_bits(codec, SOC_REG(ANA_PMU20), mask, mask);
+		else
+			snd_soc_component_update_bits(codec, SOC_REG(ANA_PMU20), mask, 0);
 
 		/* wait time is about 16ms per ASIC requirement */
 		sprd_codec_wait(10);
@@ -1890,6 +1895,35 @@ static int rcv_depop_event(struct snd_soc_dapm_widget *w,
 	return ret;
 }
 
+static int hpl_sdal_event(struct snd_soc_dapm_widget *w,
+                         struct snd_kcontrol *kcontrol, int event)
+{
+       struct snd_soc_component *codec = snd_soc_dapm_to_component(w->dapm);
+       int on = !!SND_SOC_DAPM_EVENT_ON(event);
+
+       sp_asoc_pr_dbg("%s wname %s %s\n", __func__, w->name,
+                      get_event_name(event));
+
+       update_switch(codec, SDALHPL, on);
+
+       return 0;
+}
+
+static int hpr_sdar_event(struct snd_soc_dapm_widget *w,
+                         struct snd_kcontrol *kcontrol, int event)
+{
+       struct snd_soc_component *codec = snd_soc_dapm_to_component(w->dapm);
+       int on = !!SND_SOC_DAPM_EVENT_ON(event);
+
+       sp_asoc_pr_dbg("%s wname %s %s\n", __func__, w->name,
+                      get_event_name(event));
+
+       update_switch(codec, SDARHPR, on);
+
+       return 0;
+}
+
+
 static int hp_depop_event(struct snd_soc_dapm_widget *w,
 			    struct snd_kcontrol *kcontrol, int event)
 {
@@ -2551,6 +2585,16 @@ static const struct snd_soc_dapm_widget sprd_codec_dapm_widgets[] = {
 	SND_SOC_DAPM_MIXER("HPR Mixer", SND_SOC_NOPM, 0, 0,
 		&hpr_mixer_controls[0],
 		ARRAY_SIZE(hpr_mixer_controls)),
+
+	SND_SOC_DAPM_PGA_S("HPL SDAL", SPRD_CODEC_HP_DALR_ORDER,
+			SND_SOC_NOPM,
+			0, 0, hpl_sdal_event,
+			SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_PRE_PMD),
+	SND_SOC_DAPM_PGA_S("HPR SDAR", SPRD_CODEC_HP_DALR_ORDER,
+			SND_SOC_NOPM,
+			0, 0, hpr_sdar_event,
+			SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_PRE_PMD),
+		
 	SND_SOC_DAPM_PGA_S("HP DEPOP", SPRD_CODEC_DEPOP_ORDER,
 		SND_SOC_NOPM,
 		0, 0, hp_depop_event,
@@ -2644,8 +2688,8 @@ static const struct snd_soc_dapm_widget sprd_codec_dapm_widgets[] = {
 	 */
 	SND_SOC_DAPM_SWITCH("HP", SND_SOC_NOPM,
 			0, 0, &hp_jack_switch),
-	SND_SOC_DAPM_SWITCH("HPR Pin", SND_SOC_NOPM,
-			0, 0, &hpr_pin_switch),
+//	SND_SOC_DAPM_SWITCH("HPR Pin", SND_SOC_NOPM,
+//			0, 0, &hpr_pin_switch),
 
 	SND_SOC_DAPM_MUX("Digital ADC In Sel", SND_SOC_NOPM, 0, 0,
 			 &dig_adc_in_sel),
@@ -2709,21 +2753,23 @@ static const struct snd_soc_dapm_route sprd_codec_intercon[] = {
 	{"DACL Switch", NULL, "DAC Gain"},
 	{"DACR Switch", NULL, "DAC Gain"},
 	{"HPL EAR Sel", NULL, "DACL Switch"},
-	{"HPL Path", "HPL", "HPL EAR Sel"},
+//	{"HPL Path", "HPL", "HPL EAR Sel"},
+	{"DALR DC Offset", "HPL", "HPL EAR Sel"},
+	{"HPL Path", NULL, "DALR DC Offset"},
+	{"DACR Switch", NULL, "DALR DC Offset"},
 	{"HPL Mixer", "DACLHPL Switch", "HPL Path"},
 	{"HPR Mixer", "DACRHPR Switch", "DACR Switch"},
-	{"HP DEPOP", NULL, "HPL Mixer"},
-	{"HP DEPOP", NULL, "HPR Mixer"},
-	{"DALR DC Offset", NULL, "HP DEPOP"},
-	{"HP BUF Switch", NULL, "DALR DC Offset"},
-	{"HPL EAR Sel2", NULL, "HP BUF Switch"},
-	{"HPL Switch", "HPL", "HPL EAR Sel2"},
-	{"HPR Switch", NULL, "HP BUF Switch"},
+	{"HPL SDAL", NULL, "HPL Mixer"}, //copy from A11 trunk: fix HPLR mode speaker issue
+	{"HPR SDAR", NULL, "HPR Mixer"}, //copy from A11 trunk: fix HPLR mode speaker issue	
+	{"HPL Switch", NULL, "HPL SDAL"},
+	{"HPR Switch", NULL, "HPR SDAR"},
 	{"HPL Gain", NULL, "HPL Switch"},
 	{"HPR Gain", NULL, "HPR Switch"},
-	{"HPR Pin", "Switch", "HPR Gain"},
-	{"HP Pin", NULL, "HPL Gain"},
-	{"HP Pin", NULL, "HPR Pin"},
+	{"HP DEPOP", NULL, "HPL Gain"},
+	{"HP DEPOP", NULL, "HPR Gain"},
+	{"HP BUF Switch", NULL, "HP DEPOP"},
+	{"HPL EAR Sel2", NULL, "HP BUF Switch"},
+	{"HP Pin", "HPL", "HPL EAR Sel2"},
 
 /* EAR */
 	{"RCV DEPOP", NULL, "CP"},
@@ -2846,6 +2892,20 @@ static int sprd_codec_info_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+static int sprd_codec_product_info_get(struct snd_kcontrol *kcontrol,
+				      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *codec = snd_soc_kcontrol_component(kcontrol);
+	struct sprd_codec_priv *sprd_codec = snd_soc_component_get_drvdata(codec);
+
+	if ((sprd_codec->codec_product_info & 0x20) == 0)
+		ucontrol->value.integer.value[0] = 0;
+	else
+		ucontrol->value.integer.value[0] = 1;
+	sp_asoc_pr_info("%s, value = %d, product_info = %x\n", __func__,
+			ucontrol->value.integer.value[0], sprd_codec->codec_product_info);
+	return 0;
+}
 
 static int sprd_codec_inter_pa_get(struct snd_kcontrol *kcontrol,
 				   struct snd_ctl_elem_value *ucontrol)
@@ -3186,6 +3246,8 @@ static const struct snd_kcontrol_new sprd_codec_snd_controls[] = {
 		sprd_codec_ivsence_dmic_put),
 	SOC_SINGLE_EXT("MICBIAS1 Power", SND_SOC_NOPM, 0, 1, 0,
 		micbias1_power_get, micbias1_power_put),
+	SOC_SINGLE_EXT("Codec Product Info", 0, 0, INT_MAX, 0,
+		sprd_codec_product_info_get, NULL),
 };
 
 static unsigned int sprd_codec_read(struct snd_soc_component *codec,
@@ -4001,6 +4063,13 @@ static int sprd_codec_probe(struct platform_device *pdev)
 		&sprd_codec->aud_pabst_vcal);
 	if (ret) {
 		pr_err("%s:read pa_bst_vcal failed!\n", __func__);
+		return ret;
+	}
+
+	ret = sprd_codec_read_efuse(pdev, "codec_product_info",
+		&sprd_codec->codec_product_info);
+	if (ret) {
+		pr_err("%s:read codec_product_info failed!\n", __func__);
 		return ret;
 	}
 

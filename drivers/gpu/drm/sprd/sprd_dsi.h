@@ -208,9 +208,13 @@ struct sprd_dsi {
 	const struct dsi_glb_ops *glb;
 	struct mutex lock;
 	struct dsi_context ctx;
+#ifdef LCD_CONFIG_POWER_ESD_ON
+	struct sprd_dpu *dpu;
+#endif
 };
 
 void sprd_dsi_encoder_disable_force(struct drm_encoder *encoder);
+void cali_dsi_glb_disable(struct dsi_context *ctx);
 
 extern const struct dsi_core_ops dsi_ctrl_r1p0_ops;
 extern const struct dsi_glb_ops sharkle_dsi_glb_ops;

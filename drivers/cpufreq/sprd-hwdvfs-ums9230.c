@@ -84,8 +84,32 @@ static struct volt_grades_table ums9230_volt_grades_tbl[] = {
 		},
 		.grade_count = 8,
 	},
+	[DCDC_CPU1] = {
+		.regs_array = {
+			GENREGSET(0x100, 0, 0x1ff),
+			GENREGSET(0x100, 9, 0x1ff),
+			GENREGSET(0x100, 18, 0x1ff),
+			GENREGSET(0x104, 0, 0x1ff),
+			GENREGSET(0x104, 9, 0x1ff),
+			GENREGSET(0x104, 18, 0x1ff),
+			GENREGSET(0x108, 0, 0x1ff),
+			GENREGSET(0x108, 9, 0x1ff),
+		},
+		.grade_count = 8,
+	},
 	[DCDC_CPU_I2C(1)] = {
 		.regs_array = {
+#if IS_ENABLED(CONFIG_USE_EXT_DCDC_ETA355E)
+			GENREGSET(0x12c, 0, 0x3f),
+			GENREGSET(0x12c, 8, 0x3f),
+			GENREGSET(0x12c, 16, 0x3f),
+			GENREGSET(0x12c, 24, 0x3f),
+			GENREGSET(0x130, 0, 0x3f),
+			GENREGSET(0x130, 8, 0x3f),
+			GENREGSET(0x130, 16, 0x3f),
+			GENREGSET(0x130, 24, 0x3f),
+
+#else /* CONFIG_USE_EXT_DCDC_ETA355E */
 			GENREGSET(0x12c, 0, 0x7f),
 			GENREGSET(0x12c, 8, 0x7f),
 			GENREGSET(0x12c, 16, 0x7f),
@@ -94,6 +118,7 @@ static struct volt_grades_table ums9230_volt_grades_tbl[] = {
 			GENREGSET(0x130, 8, 0x7f),
 			GENREGSET(0x130, 16, 0x7f),
 			GENREGSET(0x130, 24, 0x7f),
+#endif /* CONFIG_USE_EXT_DCDC_ETA355E */
 		},
 		.grade_count = 8,
 	},
@@ -155,6 +180,16 @@ static struct udelay_tbl ums9230_down_udelay_tbl[DCDC_NUM] = {
 
 static struct reg_info ums9230_volt_misc_cfg[] = {
 	/* Set the buck_en bit of 3rd dcdc_cpu1_voltage to 1 */
+#if IS_ENABLED(CONFIG_USE_EXT_DCDC_ETA355E)
+	GENREGVALSET(0x12c, 0, 0xbf, 0x8f),
+	GENREGVALSET(0x12c, 8, 0xbf, 0x94),
+	GENREGVALSET(0x12c, 16, 0xbf, 0x99),
+	GENREGVALSET(0x12c, 24, 0xbf, 0x9e),
+	GENREGVALSET(0x130, 0, 0xbf, 0xa3),
+	GENREGVALSET(0x130, 8, 0xbf, 0xa8),
+	GENREGVALSET(0x130, 16, 0xbf, 0xa8),
+	GENREGVALSET(0x130, 24, 0xbf, 0xa8),
+#else /* CONFIG_USE_EXT_DCDC_ETA355E */
 	GENREGVALSET(0x12c, 0, 0xff, 0x8f),
 	GENREGVALSET(0x12c, 8, 0xff, 0x94),
 	GENREGVALSET(0x12c, 16, 0xff, 0x99),
@@ -163,6 +198,7 @@ static struct reg_info ums9230_volt_misc_cfg[] = {
 	GENREGVALSET(0x130, 8, 0xff, 0xa8),
 	GENREGVALSET(0x130, 16, 0xff, 0xa8),
 	GENREGVALSET(0x130, 24, 0xff, 0xa8),
+#endif /* CONFIG_USE_EXT_DCDC_ETA355E */
 	GENREGVALSET(0, 0, 0, 0),
 };
 

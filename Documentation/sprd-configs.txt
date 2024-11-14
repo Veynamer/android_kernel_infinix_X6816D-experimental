@@ -917,6 +917,15 @@ CONFIG_ARM64_CRYPTO
 	[must] user
 	[missing plat description] none
 	[function] Support ARM64 Accelerated Cryptographic Algorithm.
+CONFIG_UFS_SPRD_UFSHEALTH
+	[arch] all
+	[plat] qogirl6,qogirn6pro
+	[missing plat] sharkl3,sharkl5.sharkl5pro,pike2
+	[field] menu
+	[subsys] vendor health info
+	[must] user
+	[missing plat description] none
+	[function] Support to get vendor ufs health info.
 CONFIG_ARM64_ERRATUM_1024718
 	[arch] arm64
 	[plat] sharkl3,sharkl5Pro
@@ -5778,8 +5787,8 @@ CONFIG_E_SHOW_MEM
 	[missing plat description] none
 	[function] show enhanced meminfo.
 CONFIG_F2FS_CHECK_FS
-	[arch] all
-	[plat] all
+	[arch] arm
+	[plat] pike2
 	[missing plat] none
 	[field] code
 	[subsys] fs
@@ -6130,6 +6139,15 @@ CONFIG_FORCE_MAX_ZONEORDER
 	[must] home
 	[missing plat description] none
 	[function] Enable to allocate large continuous physical pages.
+CONFIG_FORTIFY_SOURCE
+	[arch] arm64
+	[plat] sharkl3,sharkl5Pro
+	[missing plat] none
+	[field]
+	[subsys]
+	[must]
+	[missing plat description] none
+	[function]
 CONFIG_FRAME_POINTER
 	[arch] arm64
 	[plat] sharkl3,sharkl5Pro
@@ -11029,6 +11047,16 @@ CONFIG_MMC_CRYPTO
 	[must]
 	[missing plat description] none
 	[function]
+CONFIG_MMC_SPRD_MMCHEALTH
+	[arch] all
+	[plat] sharkl3_32
+	[missing plat] pike2,qogirl6,qogirn6pro,sharkl5,sharkl5_32,sharkle32,sharkl5Pro,sharkl3
+	[field] make,code
+	[subsys] mmc
+	[must] user
+	[missing plat description] only two customers' requirement whom use
+				sharkl3_32
+	[function] Create a node in proc/mmchealth to display emmc health info
 CONFIG_MMC_HSQ
 	[arch] all
 	[plat] all
@@ -17086,6 +17114,33 @@ CONFIG_SPRD_NATIVE_HANG_MONITOR
 	[must] user
 	[missing plat description] none
 	[function] This functio is used to monitor native hang.
+CONFIG_SPRD_PAST_RECORD
+	[arch] all
+	[plat] all
+	[missing plat] none
+	[field] make,code
+	[subsys] soc
+	[must] user
+	[missing plat description] none
+	[function] This function is used to enable sprd tracing code.
+CONFIG_ENABLE_SPRD_DEEP_SLEEP_TRACING
+	[arch] all
+	[plat] all
+	[missing plat] none
+	[field]
+	[subsys]
+	[must]
+	[missing plat description] none
+	[function] This function is used to enable sprd deep sleep tracing.
+CONFIG_ENABLE_SPRD_IO_TRACING
+	[arch] all
+	[plat] all
+	[missing plat] none
+	[field] make,code
+	[subsys] soc
+	[must] user
+	[missing plat description] none
+	[function] This function is used to enable IO tracing feature.
 CONFIG_SPRD_NET_HELPER
 	[arch] all
 	[plat] all
@@ -17587,6 +17642,15 @@ CONFIG_SPRD_WLAN_VENDOR_SPECIFIC
 	[must]
 	[missing plat description] none
 	[function]
+CONFIG_SPRD_ZS_PAGE_MIGRATE
+	[arch] arm64
+	[plat] sharkl5Pro
+	[missing plat] sharkl3
+	[field] code
+	[subsys] core
+	[must] console
+	[missing plat description] none
+	[function] avoid zs_page migrate to cma_page
 CONFIG_SRCU
 	[arch] all
 	[plat] all
@@ -20484,12 +20548,3 @@ CONFIG_ZSTD_DECOMPRESS
 	[must]
 	[missing plat description] none
 	[function]
-CONFIG_MMC_WRITE_PROTECT
-	[arch] arm64
-	[plat] qogirl6,qogirn6pro,sharkl5Pro,sharkl3,sharkl5
-	[missing plat] none
-	[field] make
-	[subsys] emmc
-	[must] user
-	[missing plat description] customer requirement
-	[function] add write protect support for emmc

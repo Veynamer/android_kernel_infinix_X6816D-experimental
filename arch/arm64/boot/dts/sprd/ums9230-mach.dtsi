@@ -43,6 +43,10 @@
 			reg = <0x0 0x80001000 0x0 0x00001000>;
 		};
 
+		wcn_reserved: wcn-mem@87000000 {
+			reg = <0x0 0x87000000 0x0 0x00800000>;
+		};
+
 		sp_ddr_reserved: sp-ddr-mem@88000000 {
 			reg = <0x0 0x88000000 0x0 0x00300000>;
 		};
@@ -89,7 +93,7 @@
 		tos_reserved: tos-mem@b0040000 {
 		/* the reg valus may be not accurate,
 		   they have been fixed in uboot !!! */
-			reg = <0x0 0xb0040000 0x0 0x05fc0000>;
+			reg = <0x0 0xb0040000 0x0 0x01fc0000>;
 		};
 
 		tos_shm_reserved: sh-mem@b6000000{
@@ -584,8 +588,6 @@
 	sprd,phy-delay-mmc-hs200 = <0x7f 0xb5 0xb5 0xb5>;
 	sprd,phy-delay-mmc-ddr52 = <0x3e 0x6a 0x48 0x48>;
 	sprd,phy-delay-mmc-highspeed = <0x60 0x2e 0x2c 0x2c>;
-	vmmc-supply = <&vddemmccore>;
-	voltage-ranges = <3000 3000>;
 	bus-width = <8>;
 	non-removable;
 	cap-mmc-hw-reset;

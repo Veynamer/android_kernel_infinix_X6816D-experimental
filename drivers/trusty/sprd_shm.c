@@ -27,7 +27,7 @@
 #include "sprd_shm.h"
 
 #include <linux/trusty/smcall.h>
-#include <trusty.h>
+#include "trusty.h"
 
 
 #define TSHM_KERN_POOL_ORDER (3)

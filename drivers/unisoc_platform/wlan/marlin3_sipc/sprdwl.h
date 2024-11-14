@@ -280,7 +280,6 @@ struct sprdwl_priv {
 	int is_suspending;
 	int is_screen_off;
 	u8 tx_mgmt_status;
-	unsigned int rand_mac_flag;
 };
 
 struct sprdwl_eap_hdr {
@@ -378,6 +377,7 @@ void acs_scan_result(struct sprdwl_vif *vif, u16 chan,
 void init_scan_list(struct sprdwl_vif *vif);
 void clean_scan_list(struct sprdwl_vif *vif);
 extern struct sprdwl_priv *g_sprdwl_priv;
+extern int special_data_flag;
 
 void sprdwl_netif_rx(struct sk_buff *skb, struct net_device *ndev);
 void sprdwl_stop_net(struct sprdwl_vif *vif);
@@ -395,6 +395,4 @@ int sprdwl_core_init(struct device *dev, struct sprdwl_priv *priv);
 int sprdwl_core_deinit(struct sprdwl_priv *priv);
 int marlin_reset_register_notify(void *callback_func, void *para);
 int marlin_reset_unregister_notify(void);
-int sprdwl_notify_init(struct sprdwl_priv *priv);
-void sprdwl_notify_deinit(struct sprdwl_priv *priv);
 #endif /* __SPRDWL_H__ */

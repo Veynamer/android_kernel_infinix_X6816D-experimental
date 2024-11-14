@@ -22,6 +22,7 @@
 #include <linux/vmalloc.h>
 #include <misc/marlin_platform.h>
 #include <misc/wcn_bus.h>
+#include <linux/of_gpio.h>
 
 #include "common/common.h"
 #include "hw_param.h"
@@ -30,6 +31,13 @@
 #define SYSTEM_WIFI_AB_CONFIG_FILE "wifi_board_config_ab.ini"
 #define SYSTEM_WIFI_AC_CONFIG_FILE "wifi_board_config_ac.ini"
 #define SYSTEM_WIFI_AA_CONFIG_FILE "wifi_board_config_aa.ini"
+#define SYSTEM_WIFI_CONFIG_FILE_NICKY "wifi_board_config_nicky.ini"
+
+/* marlin3 lite IPD versions:
+ * 1st source(original): TSMC
+ * 2nd source: Xpeedic
+ */
+#define SYSTEM_WIFI_IPD_XPEEDIC_CONFIG_FILE "wifi_board_config.xpe.ini"
 
 #define CF_TAB(NAME, MEM_OFFSET, TYPE) \
 	{ NAME, (size_t)(&(((struct wifi_conf_t *)(0))->MEM_OFFSET)), TYPE}
@@ -428,8 +436,29 @@ static int hw_param_nvm_parse(struct sprd_priv *priv, const char *path, void *p_
 	return ret;
 }
 
+char *get_project_name(void)
+{
+	struct device_node *cmdline_node;
+	const char *cmd_line = 0;
+	char *temp_name = 0;
+	int ret = 0;
+	cmdline_node = of_find_node_by_path("/chosen");
+	ret = of_property_read_string(cmdline_node,"bootargs",&cmd_line);
+	if(!ret){
+		temp_name = strstr(cmd_line,"prj_name=");
+		if(temp_name != NULL){
+		temp_name += strlen("prj_name=");
+		pr_info("prj_name_hw_param=%s\n",temp_name);
+	}else{
+		pr_err("read prj_name_hw_param err");
+		}
+	}
+	return temp_name;
+}
+
 int sc2355_get_nvm_table(struct sprd_priv *priv, struct wifi_conf_t *p)
 {
+	char *prj_name = get_project_name();
 	if (wcn_get_chip_type() == WCN_CHIP_ID_INVALID) {
 		pr_err("%s, marlin chip ID is invalid\n", __func__);
 		return -1;
@@ -439,7 +468,49 @@ int sc2355_get_nvm_table(struct sprd_priv *priv, struct wifi_conf_t *p)
 			SYSTEM_WIFI_AA_CONFIG_FILE);
 		return hw_param_nvm_parse(priv, SYSTEM_WIFI_AA_CONFIG_FILE, (void *)p);
 	}
+
+	if (marlin_get_wcn_xpe_efuse_data() == WCN_XPE_EFUSE_DATA) {
+		pr_info("%s, chip id of marlin3 lite is %d, IPD(%u) open %s\n",
+			__func__, wcn_get_chip_type(), marlin_get_wcn_xpe_efuse_data(),
+			SYSTEM_WIFI_IPD_XPEEDIC_CONFIG_FILE);
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_IPD_XPEEDIC_CONFIG_FILE, (void *)p);
+	}
+
 	pr_info("%s, chip id of marlin3 lite is %d, open %s\n",
 		__func__, wcn_get_chip_type(), SYSTEM_WIFI_CONFIG_FILE);
-	return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE, (void *)p);
+	if (prj_name !=NULL && (strncmp(prj_name,"2171A",5) ==0 )) {
+		printk("[kernel] SYSTEM_WIFI_CONFIG_FILE_NICKY");
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE_NICKY, (void *)p);
+        } else if (prj_name !=NULL && (strncmp(prj_name,"2171C",5) ==0 )) {
+		printk("[kernel] SYSTEM_WIFI_CONFIG_FILE_NICKY");
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE_NICKY, (void *)p);
+  	} else if (prj_name !=NULL && (strncmp(prj_name,"2171B",5) ==0 )) {
+		printk("[kernel] SYSTEM_WIFI_CONFIG_FILE_NICKY");
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE_NICKY, (void *)p);
+  	} else if (prj_name !=NULL && (strncmp(prj_name,"2171D",5) ==0 )) {
+		printk("[kernel] SYSTEM_WIFI_CONFIG_FILE_NICKY");
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE_NICKY, (void *)p);
+  	} else if (prj_name !=NULL && (strncmp(prj_name,"2171E",5) ==0 )) {
+		printk("[kernel] SYSTEM_WIFI_CONFIG_FILE_NICKY");
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE_NICKY, (void *)p);
+  	} else if (prj_name !=NULL && (strncmp(prj_name,"2171F",5) ==0 )) {
+		printk("[kernel] SYSTEM_WIFI_CONFIG_FILE_NICKY");
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE_NICKY, (void *)p);
+  	} else if (prj_name !=NULL && (strncmp(prj_name,"21721",5) ==0 )) {
+		printk("[kernel] SYSTEM_WIFI_CONFIG_FILE_NICKY");
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE_NICKY, (void *)p);
+  	} else if (prj_name !=NULL && (strncmp(prj_name,"21722",5) ==0 )) {
+		printk("[kernel] SYSTEM_WIFI_CONFIG_FILE_NICKY");
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE_NICKY, (void *)p);
+  	} else if (prj_name !=NULL && (strncmp(prj_name,"21723",5) ==0 )) {
+		printk("[kernel] SYSTEM_WIFI_CONFIG_FILE_NICKY");
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE_NICKY, (void *)p);
+  	} else if (prj_name !=NULL && (strncmp(prj_name,"21724",5) ==0 )) {
+		printk("[kernel] SYSTEM_WIFI_CONFIG_FILE_NICKY");
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE_NICKY, (void *)p);
+  	} else {
+		printk("[kernel] SYSTEM_WIFI_CONFIG_FILE");
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE, (void *)p);
+  	}
+		return hw_param_nvm_parse(priv, SYSTEM_WIFI_CONFIG_FILE, (void *)p);
 }

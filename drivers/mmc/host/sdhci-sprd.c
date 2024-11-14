@@ -28,6 +28,16 @@
 #include "sdhci-sprd-swcq.c"
 #endif
 
+#include <linux/proc_fs.h>
+static int sd_gpio = 0;
+#if 0
+#define DRIVER_NAME "sprd-sdhci"
+#define SDHCI_SPRD_DUMP(f, x...) \
+	pr_err("%s: " DRIVER_NAME ": " f, mmc_hostname(host->mmc), ## x)
+#endif
+#define SEND_TUNING_BLOCK 19
+#define SEND_TUNING_BLOCK_HS200 21
+
 /* SDHCI_ARGUMENT2 register high 16bit */
 #define SDHCI_SPRD_ARG2_STUFF		GENMASK(31, 16)
 
@@ -100,7 +110,6 @@
 		((wr_dly) | ((cmd_dly) << 8) | \
 		((posrd_dly) << 16) | ((negrd_dly) << 24))
 
-
 struct ranges_t {
 	int start;
 	int end;
@@ -134,6 +143,8 @@ struct sdhci_sprd_host {
 	struct register_hotplug reg_debounce_en;
 	struct register_hotplug reg_debounce_cn;
 	struct register_hotplug reg_rmldo_en;
+	int vddcore_en;
+	u32 int_status;
 };
 
 struct sdhci_sprd_phy_cfg {
@@ -278,7 +289,7 @@ static inline void _sdhci_sprd_set_clock(struct sdhci_host *host,
 	div = ((div & 0x300) >> 2) | ((div & 0xFF) << 8);
 	sdhci_enable_clk(host, div);
 
-	/* enable auto gate sdhc_enable_auto_gate */
+	/* Enable CLK_AUTO when the clock is greater than 400K. */
 	if (clk > 400000) {
 		val = sdhci_readl(host, SDHCI_SPRD_REG_32_BUSY_POSI);
 		mask = SDHCI_SPRD_BIT_OUTR_CLK_AUTO_EN |
@@ -782,19 +793,35 @@ static void sdhci_sprd_set_power(struct sdhci_host *host, unsigned char mode,
 			ret = host->mmc_host_ops.start_signal_voltage_switch(mmc, &mmc->ios);
 			if (ret)
 				pr_err("%s: signal voltage set to 3.3v fail %d!\n",
-					mmc_hostname(mmc), ret);
+	                					mmc_hostname(mmc), ret);
 			mmc->ios.vdd = old_vdd;
 			mmc->ios.signal_voltage = old_signal_voltage;
+		}
+
+                if ((strcmp(host->hw_name, "sdio_sd") == 0)) {
+			mmc->ios.signal_voltage = MMC_SIGNAL_VOLTAGE_330;
 		}
 
 		sdhci_sprd_signal_voltage_on_off(host, 0);
 		if (!IS_ERR(mmc->supply.vmmc))
 			mmc_regulator_set_ocr(host->mmc, mmc->supply.vmmc, 0);
+		
+		if(gpio_is_valid(sprd_host->vddcore_en)){
+			gpio_direction_output(sprd_host->vddcore_en, 0);
+			pr_err("%s: sd vddcore POWER OFF\n", mmc_hostname(host->mmc));
+		}
+
 		break;
 	case MMC_POWER_ON:
 	case MMC_POWER_UP:
 		if (!IS_ERR(mmc->supply.vmmc))
 			mmc_regulator_set_ocr(host->mmc, mmc->supply.vmmc, vdd);
+		
+		if(gpio_is_valid(sprd_host->vddcore_en)){
+			gpio_direction_output(sprd_host->vddcore_en, 1);
+			pr_err("%s: sd vddcore POWER UP\n", mmc_hostname(host->mmc));
+		}
+		
 		usleep_range(200, 250);
 		sdhci_sprd_signal_voltage_on_off(host, 1);
 
@@ -805,6 +832,46 @@ static void sdhci_sprd_set_power(struct sdhci_host *host, unsigned char mode,
 			sdhci_sprd_fast_hotplug_enable(sprd_host);
 		break;
 	}
+}
+#if 0
+static void sdhci_sprd_dump_vendor_regs(struct sdhci_host *host)
+{
+	u32 command;
+	struct sdhci_sprd_host *sprd_host = TO_SPRD_HOST(host);
+	char sdhci_hostname[64];
+
+	command = SDHCI_GET_CMD(sdhci_readw(host, SDHCI_COMMAND));
+	if ((command == SEND_TUNING_BLOCK) || (command == SEND_TUNING_BLOCK_HS200))
+		return;
+
+	SDHCI_SPRD_DUMP("CMD%d int 0x%08x\n", command, sprd_host->int_status);
+
+	sprintf(sdhci_hostname, "%s%s", mmc_hostname(host->mmc),
+			": sprd-sdhci + 0x000: ");
+	print_hex_dump(KERN_ERR, sdhci_hostname, DUMP_PREFIX_OFFSET,
+			16, 4, host->ioaddr, 64, 0);
+
+	sprintf(sdhci_hostname, "%s%s", mmc_hostname(host->mmc),
+			": sprd-sdhci + 0x200: ");
+	print_hex_dump(KERN_ERR, sdhci_hostname, DUMP_PREFIX_OFFSET,
+			16, 4, host->ioaddr + 0x200, 48, 0);
+
+	sprintf(sdhci_hostname, "%s%s", mmc_hostname(host->mmc),
+			": sprd-sdhci + 0x250: ");
+	print_hex_dump(KERN_ERR, sdhci_hostname, DUMP_PREFIX_OFFSET,
+			16, 4, host->ioaddr + 0x250, 32, 0);
+}
+#endif
+static u32 sdhci_sprd_int_status(struct sdhci_host *host, u32 intmask)
+{
+	struct sdhci_sprd_host *sprd_host = TO_SPRD_HOST(host);
+
+	sprd_host->int_status = intmask;
+#if 0
+	if (intmask & SDHCI_INT_ERROR_MASK)
+		sdhci_sprd_dump_vendor_regs(host);
+#endif
+	return intmask;
 }
 
 static struct sdhci_ops sdhci_sprd_ops = {
@@ -825,6 +892,7 @@ static struct sdhci_ops sdhci_sprd_ops = {
 #if IS_ENABLED(CONFIG_MMC_SWCQ)
 	.dump_vendor_regs = sdhci_sprd_dumpregs,
 #endif
+	.irq = sdhci_sprd_int_status,
 };
 
 static void sdhci_sprd_check_auto_cmd23(struct mmc_host *mmc,
@@ -940,9 +1008,10 @@ static int sdhci_sprd_voltage_switch(struct mmc_host *mmc, struct mmc_ios *ios)
 		break;
 	}
 
-reset:
 	/* Wait for 300 ~ 500 us for pin state stable */
 	usleep_range(300, 500);
+
+reset:
 	sdhci_reset(host, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
 
 	return 0;
@@ -1041,6 +1110,46 @@ static void sdhci_sprd_get_fast_hotplug_info(struct device_node *np,
 		"sd-hotplug-rmldo-en-syscon");
 }
 
+//wt_liuhaiqing,20220531,Add proc file for sdcard slot detect
+static int sd_card_status_show(struct seq_file *m, void *v)
+{
+	int gpio_value = 0;
+
+	gpio_value = __gpio_get_value(sd_gpio);
+	pr_err("%s: get gpio %d value is %d\n", __func__, sd_gpio, gpio_value);
+	seq_printf(m, "%d\n", gpio_value);
+
+	return 0;
+}
+static int sd_card_status_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, sd_card_status_show, NULL);
+}
+
+static const struct file_operations sd_card_status_fops = {
+	.open       = sd_card_status_proc_open,
+	.read       = seq_read,
+	.llseek     = seq_lseek,
+	.release    = single_release,
+};
+
+static int sd_card_tray_create_proc(void)
+{
+
+	struct proc_dir_entry *status_entry;
+
+	status_entry = proc_create("sd_tray_gpio_value", 0, NULL, &sd_card_status_fops);
+	if (!status_entry){
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+static void sd_card_tray_remove_proc(void)
+{
+	remove_proc_entry("sd_tray_gpio_value", NULL);
+}
 static int sdhci_sprd_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
@@ -1110,6 +1219,19 @@ static int sdhci_sprd_probe(struct platform_device *pdev)
 	else {
 		sdhci_sprd_get_fast_hotplug_info(np, sprd_host);
 		sprd_host->detect_gpio_polar = flags;
+		sd_gpio = sprd_host->detect_gpio;
+	}
+	
+    sprd_host->vddcore_en = of_get_named_gpio(np, "vddcore-en", 0);
+    if (!gpio_is_valid(sprd_host->vddcore_en)){
+        sprd_host->vddcore_en = -1;
+	} else {
+		ret = gpio_request(sprd_host->vddcore_en, "sd-vddcore");
+		if (ret) {
+			pr_err("Find vddcore gpio_%d\n", sprd_host->vddcore_en);
+			gpio_free(sprd_host->vddcore_en);
+			gpio_direction_output(sprd_host->vddcore_en, 0);
+		}
 	}
 
 	clk = devm_clk_get(&pdev->dev, "sdio");
@@ -1225,6 +1347,14 @@ static int sdhci_sprd_probe(struct platform_device *pdev)
 	pm_runtime_mark_last_busy(&pdev->dev);
 	pm_runtime_put_autosuspend(&pdev->dev);
 
+//wt_liuhaiqing,20220531,Add proc file for sdcard slot detect
+	if ((strcmp(mmc_hostname(host->mmc), "mmc1") == 0)) {
+		if(sd_card_tray_create_proc()) {
+			pr_err("create proc sd_card_status failed\n");
+		} else {
+			pr_err("create proc sd_card_status successed\n");
+		}
+	}
 	return 0;
 
 err_cleanup_host:
@@ -1253,6 +1383,10 @@ static int sdhci_sprd_remove(struct platform_device *pdev)
 {
 	struct sdhci_host *host = platform_get_drvdata(pdev);
 	struct sdhci_sprd_host *sprd_host = TO_SPRD_HOST(host);
+//wt_liuhaiqing,20220531,Add proc file for sdcard slot detect
+	if((strcmp(mmc_hostname(host->mmc), "mmc1") == 0)){
+		sd_card_tray_remove_proc();
+	}
 
 	sdhci_remove_host(host, 0);
 

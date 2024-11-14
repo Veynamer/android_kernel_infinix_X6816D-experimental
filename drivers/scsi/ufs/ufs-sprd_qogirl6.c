@@ -29,7 +29,8 @@
 #include "ufs-sprd_qogirl6.h"
 #include "ufs_quirks.h"
 #include "unipro.h"
-
+#include "ufs-ioctl.h"
+#include "ufs-sprd.h"
 
 int syscon_get_args(struct device *dev, struct ufs_sprd_host *host)
 {
@@ -496,6 +497,78 @@ out_release_mem:
 out:
 	return err;
 }
+
+int sprd_ufs_ioctl_get_dev_info(struct scsi_device *dev, void __user *buf_user)
+{
+	struct ufs_hba *hba;
+	struct ufs_ioctl_query_device_info *idata = NULL;
+	u8 desc_buf[QUERY_DESC_MAX_SIZE] = {0};
+	u8 *str_desc_buf[QUERY_DESC_MAX_SIZE + 1] = {0};
+	char *err_str = "ERR";
+	int err;
+
+	if (dev)
+		hba = shost_priv(dev->host);
+	else
+		return -ENODEV;
+
+	/* check scsi device instance */
+	if (!dev->rev) {
+		dev_err(hba->dev, "%s: scsi_device or rev is NULL\n", __func__);
+		err = -ENOENT;
+		goto out;
+	}
+
+	idata = kzalloc(sizeof(struct ufs_ioctl_query_device_info), GFP_KERNEL);
+
+	if (!idata) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	/* extract params from user buffer */
+	err = copy_from_user(idata, buf_user,
+			sizeof(struct ufs_ioctl_query_device_info));
+
+	if (err) {
+		dev_err(hba->dev,
+			"%s: failed copying buffer from user, err %d\n",
+			__func__, err);
+		goto out_release_mem;
+	}
+
+	if (!ufshcd_read_desc_param(hba, QUERY_DESC_IDN_DEVICE, 0, 0, desc_buf,
+				    QUERY_DESC_MAX_SIZE)) {
+		memcpy(idata->fw_rev, str_desc_buf + QUERY_DESC_HDR_SIZE,
+		       UFS_IOCTL_FFU_MAX_FW_VER_BYTES);
+	} else {
+		dev_err(hba->dev,
+			"%s: failed read product_rev from device, err %d\n",
+			__func__, err);
+		strcpy(idata->fw_rev, err_str);
+	}
+
+	memcpy(idata->fw_rev, dev->rev, UFS_IOCTL_FFU_MAX_FW_VER_BYTES);
+	memcpy(idata->vendor, dev->vendor, UFS_IOCTL_FFU_MAX_VENDOR_BYTES);
+	memcpy(idata->model, dev->model, UFS_IOCTL_FFU_MAX_MODEL_BYTES);
+
+	idata->manid = hba->dev_info.wmanufacturerid;
+	idata->max_hw_sectors_size = (dev->request_queue->limits.max_hw_sectors << 9);
+
+	err = copy_to_user(buf_user, idata, sizeof(struct ufs_ioctl_query_device_info));
+	if (err) {
+		dev_err(hba->dev, "%s: err %d copying to user.\n",
+				__func__, err);
+		goto out_release_mem;
+	}
+
+out_release_mem:
+	kfree(idata);
+out:
+
+	return 0;
+}
+
 int ufshcd_sprd_ioctl(struct scsi_device *dev, unsigned int cmd, void __user *buffer)
 {
 	struct ufs_hba *hba = shost_priv(dev->host);
@@ -528,6 +601,9 @@ int ufshcd_sprd_ioctl(struct scsi_device *dev, unsigned int cmd, void __user *bu
 		err = sprd_ufs_ioctl_get_pwr_info(dev, buffer);
 		host->ioctl_cmd = 0;
 		break;
+	case UFS_IOCTL_GET_DEVICE_INFO:
+        err = sprd_ufs_ioctl_get_dev_info(dev, buffer);
+        break;
 	default:
 		err = -ENOIOCTLCMD;
 		dev_dbg(hba->dev, "%s: Unsupported ioctl cmd %d\n", __func__, cmd);
@@ -647,6 +723,7 @@ static int ufs_sprd_hce_enable_notify(struct ufs_hba *hba,
 		ufshcd_writel(hba, CONTROLLER_ENABLE, REG_CONTROLLER_ENABLE);
 		break;
 	case POST_CHANGE:
+		hba->clk_gating.delay_ms = 10;
 		ufshcd_writel(hba, CLKDIV, HCLKDIV_REG);
 		break;
 	default:
@@ -666,7 +743,9 @@ static int ufs_sprd_apply_dev_quirks(struct ufs_hba *hba)
 	u32 pa_tactivate_us, peer_pa_tactivate_us, max_pa_tactivate_us;
 	u8 gran_to_us_table[] = {1, 4, 8, 16, 32, 100};
 	u32 new_pa_tactivate, new_peer_pa_tactivate;
+	struct ufs_sprd_host *host = ufshcd_get_variant(hba);
 
+	host->wlun_dev_add = true;
 	ret = ufshcd_dme_get(hba, UIC_ARG_MIB(PA_GRANULARITY),
 				  &granularity);
 	if (ret)
@@ -757,6 +836,7 @@ static int ufs_sprd_link_startup_notify(struct ufs_hba *hba,
 
 		break;
 	case POST_CHANGE:
+		hba->clk_gating.delay_ms = 10;
 		break;
 	default:
 		err = -EINVAL;
@@ -781,21 +861,13 @@ static int ufs_sprd_pwr_change_notify(struct ufs_hba *hba,
 
 	switch (status) {
 	case PRE_CHANGE:
-		if ((2 != dev_max_params->lane_rx) || (2 != dev_max_params->lane_tx)) {
-			dev_err(hba->dev, "%s: unsupport lanes value. rx=%d, tx=%d\n",
-					__func__,
-					dev_max_params->lane_rx,
-					dev_max_params->lane_tx);
-			dev_max_params->lane_rx = (dev_max_params->lane_rx > dev_max_params->lane_tx) ?
-					dev_max_params->lane_tx : dev_max_params->lane_rx;
-			dev_max_params->lane_tx = dev_max_params->lane_rx;
-			dev_err(hba->dev, "%s: now connected lanes value. rx=%d, tx=%d\n",
-					__func__,
-					dev_max_params->lane_rx,
-					dev_max_params->lane_tx);
-		}
-		hba->max_pwr_info.is_valid = false;
-		err = -EPERM;
+		dev_req_params->gear_rx = UFS_HS_G3;
+		dev_req_params->gear_tx = UFS_HS_G3;
+		dev_req_params->lane_rx = 2;
+		dev_req_params->lane_tx = 2;
+		dev_req_params->pwr_rx = FAST_MODE;
+		dev_req_params->pwr_tx = FAST_MODE;
+		dev_req_params->hs_rate = PA_HS_MODE_B;
 		break;
 	case POST_CHANGE:
 		/* Set auto h8 ilde time to 10ms */
@@ -805,7 +877,7 @@ static int ufs_sprd_pwr_change_notify(struct ufs_hba *hba,
 		err = -EINVAL;
 		break;
 	}
-
+	ufs_sprd_pwr_change_compare(hba, status, dev_max_params, dev_req_params, err);
 out:
 	return err;
 }
@@ -867,7 +939,8 @@ static void ufs_sprd_hibern8_notify(struct ufs_hba *hba,
 		break;
 	case POST_CHANGE:
 		if (cmd == UIC_CMD_DME_HIBER_EXIT) {
-			hba->caps &= ~UFSHCD_CAP_CLK_GATING;
+			hba->caps &= ~UFSHCD_CAP_HIBERN8_WITH_CLK_GATING;
+			down_write(&hba->clk_scaling_lock);
 			if (host->ioctl_cmd == UFS_IOCTL_ENTER_MODE) {
 				ret = sprd_ufs_pwmmode_change(hba);
 				if (ret)
@@ -880,9 +953,6 @@ static void ufs_sprd_hibern8_notify(struct ufs_hba *hba,
 					sprd_get_soc_id(AON_VER_ID, &aon_ver_id, 1);
 					if (aon_ver_id == AON_VER_UFS)
 						ufs_set_hstxsclk(hba);
-					if ((((hba->max_pwr_info.info.pwr_tx) << 4)|
-						(hba->max_pwr_info.info.pwr_rx)) == HS_MODE_VAL)
-						hba->max_pwr_info.is_valid = true;
 					ret = sprd_ufs_pwrchange(hba);
 					if (ret) {
 						pr_err("ufs_pwm2hs err");
@@ -897,10 +967,10 @@ static void ufs_sprd_hibern8_notify(struct ufs_hba *hba,
 								complete(&host->hs_async_done);
 						}
 					}
-					hba->max_pwr_info.is_valid = false;
 				}
 			}
-			hba->caps |= UFSHCD_CAP_CLK_GATING;
+			up_write(&hba->clk_scaling_lock);
+			hba->caps |= UFSHCD_CAP_HIBERN8_WITH_CLK_GATING;
 			/* Set auto h8 ilde time to 10ms */
 			//ufshcd_auto_hibern8_enable(hba);
 		}
@@ -915,11 +985,13 @@ static int ufs_sprd_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 	hba->rpm_lvl = UFS_PM_LVL_1;
 	hba->spm_lvl = UFS_PM_LVL_5;
 	hba->uic_link_state = UIC_LINK_OFF_STATE;
+	mdelay(30);
 	return 0;
 }
 
 static int ufs_sprd_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 {
+	udelay(100);
 	return 0;
 }
 
@@ -963,7 +1035,7 @@ static inline int ufs_sprd_read_geometry_desc_param(struct ufs_hba *hba,
 #define SEC_PROTOCOL_CMD_SIZE 12
 #define SEC_PROTOCOL_RETRIES 3
 #define SEC_PROTOCOL_RETRIES_ON_RESET 10
-#define SEC_PROTOCOL_TIMEOUT msecs_to_jiffies(1000)
+#define SEC_PROTOCOL_TIMEOUT msecs_to_jiffies(3000)
 
 static int ufs_sprd_rpmb_security_out(struct scsi_device *sdev,
 				      struct rpmb_frame *frames, u32 cnt)
@@ -1159,6 +1231,7 @@ static inline void ufs_sprd_rpmb_add(struct ufs_hba *hba)
 out_put_dev:
 	scsi_device_put(host->sdev_ufs_rpmb);
 	host->sdev_ufs_rpmb = NULL;
+	host->wlun_dev_add = false;
 }
 
 static inline void ufs_sprd_rpmb_remove(struct ufs_hba *hba)
@@ -1171,6 +1244,7 @@ static inline void ufs_sprd_rpmb_remove(struct ufs_hba *hba)
 	rpmb_dev_unregister(hba->dev);
 	scsi_device_put(host->sdev_ufs_rpmb);
 	host->sdev_ufs_rpmb = NULL;
+	host->wlun_dev_add = false;
 }
 void ufs_sprd_setup_xfer_req(struct ufs_hba *hba, int task_tag, bool scsi_cmd)
 {
@@ -1191,6 +1265,47 @@ void ufs_sprd_setup_xfer_req(struct ufs_hba *hba, int task_tag, bool scsi_cmd)
 		pr_err("ufs after dword_0 = %lx,%lx\n", dword_0, req_desc->header.dword_0);
 	}
 }
+
+static void ufs_sprd_linkup_start_tstamp(struct ufs_hba *hba,
+					 struct uic_command *ucmd)
+{
+	struct ufs_sprd_host *host = ufshcd_get_variant(hba);
+
+	if (ucmd->command == UIC_CMD_DME_LINK_STARTUP)
+		host->linkup_start_tstamp = ktime_get();
+}
+
+static void ufs_sprd_dco_calibration(struct ufs_hba *hba,
+				     struct uic_command *ucmd)
+{
+	struct ufs_sprd_host *host = ufshcd_get_variant(hba);
+	int value = 0;
+	int apb_dco_cal_result = 0;
+
+	if (ucmd->command == UIC_CMD_DME_LINK_STARTUP) {
+		while(1) {
+			if(ktime_to_us(ktime_sub(ktime_get(),
+			   host->linkup_start_tstamp)) > WAIT_1MS_TIMEOUT) {
+				value = readl((host->ufs_analog_reg) +
+					       MPHY_DIG_CFG62_LANE0);
+				apb_dco_cal_result = (value >> 24);
+				break;
+			}
+		}
+
+		if (apb_dco_cal_result < APB_DCO_CAL_RESULT_RANGE) {
+			ufs_sprd_rmwl(host->ufs_analog_reg,
+				      MPHY_APB_REG_DCO_CTRLBIT,
+				      MPHY_APB_REG_DCO_VALUE,
+				      MPHY_DIG_CFG15_LANE0);
+			ufs_sprd_rmwl(host->ufs_analog_reg,
+				      MPHY_APB_OVR_REG_DCO_CTRLBIT,
+				      MPHY_APB_OVR_REG_DCO_VALUE,
+				      MPHY_DIG_CFG1_LANE0);
+		}
+	}
+}
+
 /*
  * struct ufs_hba_sprd_vops - UFS sprd specific variant operations
  *
@@ -1224,7 +1339,12 @@ static int ufs_sprd_probe(struct platform_device *pdev)
 	int err;
 	struct device *dev = &pdev->dev;
 	struct ufs_hba *hba;
+	struct ufs_sprd_host *host = NULL;
+	unsigned long timeout = jiffies + msecs_to_jiffies(1000);
 
+	ufs_hba_sprd_vops.android_kabi_reserved1 =
+					(u64)ufs_sprd_linkup_start_tstamp;
+	ufs_hba_sprd_vops.android_kabi_reserved2 = (u64)ufs_sprd_dco_calibration;
 	/* Perform generic probe */
 	err = ufshcd_pltfrm_init(pdev, &ufs_hba_sprd_vops);
 	if (err) {
@@ -1233,6 +1353,15 @@ static int ufs_sprd_probe(struct platform_device *pdev)
 	}
 
 	hba = platform_get_drvdata(pdev);
+	host = ufshcd_get_variant(hba);
+	host->wlun_dev_add = false;
+
+	/* Poll dev init complete flag to be true*/
+	while (time_before(jiffies, timeout) && !host->wlun_dev_add)
+		usleep_range(5000, 10000);
+
+	if (!host->wlun_dev_add)
+		dev_warn(hba->dev, "Dev init not complete!\n");
 	ufs_sprd_rpmb_add(hba);
 out:
 	return err;

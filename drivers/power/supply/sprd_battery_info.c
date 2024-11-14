@@ -15,7 +15,6 @@
 #include <linux/power_supply.h>
 #include <linux/power/sprd_battery_info.h>
 #include <linux/slab.h>
-#include <linux/gpio.h>//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger 2022-10-14
 
 #define SPRD_BATTERY_OCV_TABLE_CHECK_VOLT_UV		3400000
 #define SPRD_BATTERY_OCV_CAP_TABLE_CHECK_VOLT_THRESHOLD	3000000
@@ -89,6 +88,79 @@ int sprd_battery_parse_battery_id(struct power_supply *psy)
 	return id;
 }
 EXPORT_SYMBOL_GPL(sprd_battery_parse_battery_id);
+
+static int charger_id = 0xFF;
+static int sprd_charger_parse_cmdline_match(char *match_str, char *result, int size)
+{
+	struct device_node *cmdline_node = NULL;
+	const char *cmdline;
+	char *match, *match_end;
+	int len, match_str_len, ret;
+
+	if (!result || !match_str)
+		return -EINVAL;
+
+	memset(result, '\0', size);
+	match_str_len = strlen(match_str);
+
+	cmdline_node = of_find_node_by_path("/chosen");
+	if (!cmdline_node) {
+		printk("%s:line%d: NULL pointer!!!\n", __func__, __LINE__);
+		return -EINVAL;
+	}
+
+	ret = of_property_read_string(cmdline_node, "bootargs", &cmdline);
+	if (ret) {
+		printk("%s failed to read bootargs\n", __func__);
+		return -EINVAL;
+	}
+
+	match = strstr(cmdline, match_str);
+	if (!match) {
+		printk("Mmatch: %s fail in cmdline\n", match_str);
+		return -EINVAL;
+	}
+
+	match_end = strstr((match + match_str_len), " ");
+	if (!match_end) {
+		printk("Match end of : %s fail in cmdline\n", match_str);
+		return -EINVAL;
+	}
+
+	len = match_end - (match + match_str_len);
+	if (len < 0 || len > size) {
+		printk("Match cmdline :%s fail, len = %d\n", match_str, len);
+		return -EINVAL;
+	}
+
+	memcpy(result, (match + match_str_len), len);
+
+	return 0;
+}
+
+int sprd_charger_parse_charger_id(void)
+{
+	char *str = "chargeridinfo=";
+	char result[32] = {};
+	int id = 0, ret;
+
+	printk("In ... charger_id = %d\n", charger_id);
+	if (charger_id != 0xFF)return charger_id;
+
+	ret = sprd_charger_parse_cmdline_match(str, result, sizeof(result));
+	if (!ret) {
+		ret = kstrtoint(result, 10, &id);
+		if (ret) {
+			id = 0;
+			printk("Covert charger_id fail, ret = %d, result = %s\n", ret, result);
+		}
+	}
+	printk("End ... charger_id = %d\n", id);
+	charger_id = id;
+
+	return charger_id;
+}
+EXPORT_SYMBOL_GPL(sprd_charger_parse_charger_id);
 
 static bool sprd_battery_ocv_cap_table_check(struct power_supply *psy,
 					     struct sprd_battery_ocv_table *table,
@@ -192,13 +264,8 @@ static int sprd_battery_parse_battery_ocv_capacity_table(struct sprd_battery_inf
 		char *propname;
 		const __be32 *list;
 		int i, tab_len, size;
-		//Added by qinjinke@sagereal.com for NVA-1589 Nova plus charger begin 2022-10-14
-		if (!gpio_get_value(255)) {
-			propname = kasprintf(GFP_KERNEL, "ocv-capacity-table-%d", index);
-		}else{
-			propname = kasprintf(GFP_KERNEL, "ocv-capacity-table-p-%d", index);
-		}
-		//Added by qinjinke@sagereal.com for NVA-1589 Nova plus charger end 2022-10-14
+
+		propname = kasprintf(GFP_KERNEL, "ocv-capacity-table-%d", index);
 		list = of_get_property(battery_np, propname, &size);
 		if (!list || !size) {
 			dev_err(&psy->dev, "failed to get %s\n", propname);
@@ -219,7 +286,7 @@ static int sprd_battery_parse_battery_ocv_capacity_table(struct sprd_battery_inf
 			table[i].ocv = be32_to_cpu(*list++);
 			table[i].capacity = be32_to_cpu(*list++);
 		}
-		printk("parse battery_ocv_table[%d] = %d\n",index,info->battery_ocv_table[index]->ocv);
+
 		if (!sprd_battery_ocv_cap_table_check(psy, info->battery_ocv_table[index],
 						      info->battery_ocv_table_len[index])) {
 			dev_err(&psy->dev, "ocv_cap_table value is wrong, please check\n");
@@ -280,6 +347,35 @@ static int sprd_battery_parse_battery_temp_capacity_table(struct sprd_battery_in
 		battery_temp_cap_table[index].temp = be32_to_cpu(*list++);
 		battery_temp_cap_table[index].cap = be32_to_cpu(*list++);
 	}
+
+
+	return 0;
+}
+
+static int sprd_battery_parse_dischg_battery_temp_capacity_table(struct sprd_battery_info *info,
+							  struct device_node *battery_np,
+							  struct power_supply *psy)
+{
+	struct sprd_battery_temp_cap_table *dischg_battery_temp_cap_table;
+	const __be32 *list;
+	int index, len;
+
+	list = of_get_property(battery_np, "dischg-capacity-temp-table", &len);
+	if (!list || !len)
+		return 0;
+
+	info->dischg_battery_temp_cap_table_len = len / (2 * sizeof(__be32));
+	dischg_battery_temp_cap_table = info->dischg_battery_temp_cap_table =
+		devm_kcalloc(&psy->dev, info->battery_temp_cap_table_len,
+			     sizeof(*dischg_battery_temp_cap_table), GFP_KERNEL);
+	if (!info->dischg_battery_temp_cap_table)
+		return -ENOMEM;
+
+	for (index = 0; index < info->dischg_battery_temp_cap_table_len; index++) {
+		dischg_battery_temp_cap_table[index].temp = be32_to_cpu(*list++);
+		dischg_battery_temp_cap_table[index].cap = be32_to_cpu(*list++);
+	}
+
 
 	return 0;
 }
@@ -599,17 +695,11 @@ static int sprd_battery_init_jeita_table(struct sprd_battery_info *info,
 {
 	struct sprd_battery_jeita_table *table;
 	const __be32 *list;
+	const char *np_name = sprd_battery_jeita_type_names[jeita_num];
 	struct sprd_battery_jeita_table **cur_table = &info->jeita_table[jeita_num];
 	int i, size;
-	//Added by qinjinke@sagereal.com for NVA-1589 Nova plus charger begin 2022-10-14
-	if(!gpio_get_value(255)){
-		const char *np_name = sprd_battery_jeita_type_names[jeita_num];
-		list = of_get_property(battery_np, np_name, &size);
-	} else {
-		const char *np_name_p = sprd_battery_jeita_type_names_p[jeita_num];
-		list = of_get_property(battery_np, np_name_p, &size);
-	}
-	//Added by qinjinke@sagereal.com for NVA-1589 Nova plus charger end 2022-10-14
+
+	list = of_get_property(battery_np, np_name, &size);
 	if (!list || !size)
 		return 0;
 
@@ -627,6 +717,14 @@ static int sprd_battery_init_jeita_table(struct sprd_battery_info *info,
 		table[i].recovery_temp = be32_to_cpu(*list++) - 1000;
 		table[i].current_ua = be32_to_cpu(*list++);
 		table[i].term_volt = be32_to_cpu(*list++);
+		table[i].step_chg_cur = be32_to_cpu(*list++);
+		table[i].step_chg_volt = be32_to_cpu(*list++);
+		dev_info(dev, "[%s] %s: temp = %d, rec_temp = %d, cur_ua = %d, term_volt = %d, "
+			 "step_chg_cur = %d, step_chg_volt = %d\n", __func__, np_name,
+			 table[i].temp, table[i].recovery_temp,
+			 table[i].current_ua, table[i].term_volt,
+			 table[i].step_chg_cur, table[i].step_chg_volt);
+
 	}
 
 	*cur_table = table;
@@ -672,11 +770,11 @@ struct sprd_battery_ocv_table *sprd_battery_find_ocv2cap_table(struct sprd_batte
 }
 EXPORT_SYMBOL_GPL(sprd_battery_find_ocv2cap_table);
 
-int sprd_battery_get_battery_info(struct power_supply *psy, struct sprd_battery_info *info)
+int sprd_battery_get_battery_info(struct power_supply *psy, struct sprd_battery_info *info, int battery_id)
 {
 	struct device_node *battery_np;
 	const char *value;
-	int err, index, battery_id;
+	int err, index, num = 0;
 
 	info->charge_full_design_uah         = -EINVAL;
 	info->voltage_min_design_uv          = -EINVAL;
@@ -732,9 +830,12 @@ int sprd_battery_get_battery_info(struct power_supply *psy, struct sprd_battery_
 		return -ENXIO;
 	}
 
-	battery_id = sprd_battery_parse_battery_id(psy);
+	//battery_id = sprd_battery_parse_battery_id(psy);
 
-	battery_np = of_parse_phandle(psy->of_node, "monitored-battery", battery_id);
+	if (battery_id == 2)
+		num = 1;
+
+	battery_np = of_parse_phandle(psy->of_node, "monitored-battery", num);
 	if (!battery_np) {
 		dev_warn(&psy->dev, "Fail to get monitored-battery-id-%d\n", battery_id);
 		return -ENODEV;
@@ -747,6 +848,8 @@ int sprd_battery_get_battery_info(struct power_supply *psy, struct sprd_battery_
 	if (strcmp("simple-battery", value))
 		return -ENODEV;
 
+	of_property_read_u32(battery_np, "charge-full-design-microamp-hours",
+			     &info->charge_full_design_uah);
 	of_property_read_u32(battery_np, "voltage-min-design-microvolt",
 			     &info->voltage_min_design_uv);
 	of_property_read_u32(battery_np, "precharge-current-microamp",
@@ -755,15 +858,22 @@ int sprd_battery_get_battery_info(struct power_supply *psy, struct sprd_battery_
 			     &info->charge_term_current_ua);
 	of_property_read_u32(battery_np, "constant-charge-current-max-microamp",
 			     &info->constant_charge_current_max_ua);
-
+	of_property_read_u32(battery_np, "constant-charge-voltage-max-microvolt",
+			     &info->constant_charge_voltage_max_uv);
 	of_property_read_u32(battery_np, "fullbatt-voltage-offset-microvolt",
 			     &info->fullbatt_voltage_offset_uv);
+	of_property_read_u32(battery_np, "factory-internal-resistance-micro-ohms",
+			     &info->factory_internal_resistance_uohm);
+	of_property_read_u32(battery_np, "fullbatt-track-end-vol",
+			     &info->fullbatt_track_end_voltage_uv);
 	of_property_read_u32(battery_np, "fullbatt-track-end-cur",
 			     &info->fullbatt_track_end_current_uA);
-
+	of_property_read_u32(battery_np, "first-calib-voltage",
+			     &info->first_capacity_calibration_voltage_uv);
 	of_property_read_u32(battery_np, "first-calib-capacity",
 			     &info->first_capacity_calibration_capacity);
-
+	of_property_read_u32(battery_np, "fullbatt-voltage",
+			     &info->fullbatt_voltage_uv);
 	of_property_read_u32(battery_np, "fullbatt-current",
 			     &info->fullbatt_current_uA);
 	of_property_read_u32(battery_np, "first-fullbatt-current",
@@ -777,67 +887,23 @@ int sprd_battery_get_battery_info(struct power_supply *psy, struct sprd_battery_
 			     &info->ir.cv_upper_limit_offset_uv);
 	of_property_read_u32(battery_np, "force-jeita-status",
 			     &info->force_jeita_status);
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger begin  2022-10-14
-	if(!gpio_get_value(255)) {//QinJinke
-		of_property_read_u32(battery_np, "charge-full-design-microamp-hours",
-			     &info->charge_full_design_uah);	
-		of_property_read_u32(battery_np, "constant-charge-voltage-max-microvolt",
-			     &info->constant_charge_voltage_max_uv);
-		of_property_read_u32(battery_np, "fullbatt-voltage",
-			     &info->fullbatt_voltage_uv);
-		of_property_read_u32(battery_np, "fullbatt-track-end-vol",
-			     &info->fullbatt_track_end_voltage_uv);
-		of_property_read_u32(battery_np, "factory-internal-resistance-micro-ohms",
-			     &info->factory_internal_resistance_uohm);
-		of_property_read_u32(battery_np, "first-calib-voltage",
-			     &info->first_capacity_calibration_voltage_uv);			     
-		of_property_read_u32_index(battery_np, "charge-sdp-current-microamp", 0,
-					   &info->cur.sdp_cur);
-		of_property_read_u32_index(battery_np, "charge-sdp-current-microamp", 1,
-					   &info->cur.sdp_limit);
-		of_property_read_u32_index(battery_np, "charge-dcp-current-microamp", 0,
-					   &info->cur.dcp_cur);
-		of_property_read_u32_index(battery_np, "charge-dcp-current-microamp", 1,
-					   &info->cur.dcp_limit);
-		of_property_read_u32_index(battery_np, "charge-cdp-current-microamp", 0,
-					   &info->cur.cdp_cur);
-		of_property_read_u32_index(battery_np, "charge-cdp-current-microamp", 1,
-					   &info->cur.cdp_limit);
-		of_property_read_u32_index(battery_np, "charge-unknown-current-microamp", 0,
-					   &info->cur.unknown_cur);
-		of_property_read_u32_index(battery_np, "charge-unknown-current-microamp", 1,
-					   &info->cur.unknown_limit);
-	}else{
-		of_property_read_u32(battery_np, "charge-full-design-microamp-hours-p",
-			     &info->charge_full_design_uah);	
-		of_property_read_u32(battery_np, "constant-charge-voltage-max-microvolt-p",
-			     &info->constant_charge_voltage_max_uv);
-		of_property_read_u32(battery_np, "fullbatt-voltage-p",
-			     &info->fullbatt_voltage_uv);
-		of_property_read_u32(battery_np, "fullbatt-track-end-vol-p",
-			     &info->fullbatt_track_end_voltage_uv);
-		of_property_read_u32(battery_np, "factory-internal-resistance-micro-ohms-p",
-			     &info->factory_internal_resistance_uohm);
-		of_property_read_u32(battery_np, "first-calib-voltage-p",
-			     &info->first_capacity_calibration_voltage_uv);   
-		of_property_read_u32_index(battery_np, "charge-sdp-current-microamp-p", 0,
-					   &info->cur.sdp_cur);
-		of_property_read_u32_index(battery_np, "charge-sdp-current-microamp-p", 1,
-					   &info->cur.sdp_limit);
-		of_property_read_u32_index(battery_np, "charge-dcp-current-microamp-p", 0,
-					   &info->cur.dcp_cur);
-		of_property_read_u32_index(battery_np, "charge-dcp-current-microamp-p", 1,
-					   &info->cur.dcp_limit);
-		of_property_read_u32_index(battery_np, "charge-cdp-current-microamp-p", 0,
-					   &info->cur.cdp_cur);
-		of_property_read_u32_index(battery_np, "charge-cdp-current-microamp-p", 1,
-					   &info->cur.cdp_limit);
-		of_property_read_u32_index(battery_np, "charge-unknown-current-microamp-p", 0,
-					   &info->cur.unknown_cur);
-		of_property_read_u32_index(battery_np, "charge-unknown-current-microamp-p", 1,
-					   &info->cur.unknown_limit);
-	}
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger end  2022-10-14
+
+	of_property_read_u32_index(battery_np, "charge-sdp-current-microamp", 0,
+				   &info->cur.sdp_cur);
+	of_property_read_u32_index(battery_np, "charge-sdp-current-microamp", 1,
+				   &info->cur.sdp_limit);
+	of_property_read_u32_index(battery_np, "charge-dcp-current-microamp", 0,
+				   &info->cur.dcp_cur);
+	of_property_read_u32_index(battery_np, "charge-dcp-current-microamp", 1,
+				   &info->cur.dcp_limit);
+	of_property_read_u32_index(battery_np, "charge-cdp-current-microamp", 0,
+				   &info->cur.cdp_cur);
+	of_property_read_u32_index(battery_np, "charge-cdp-current-microamp", 1,
+				   &info->cur.cdp_limit);
+	of_property_read_u32_index(battery_np, "charge-unknown-current-microamp", 0,
+				   &info->cur.unknown_cur);
+	of_property_read_u32_index(battery_np, "charge-unknown-current-microamp", 1,
+				   &info->cur.unknown_limit);
 	of_property_read_u32_index(battery_np, "charge-fchg-current-microamp", 0,
 				   &info->cur.fchg_cur);
 	of_property_read_u32_index(battery_np, "charge-fchg-current-microamp", 1,
@@ -870,6 +936,12 @@ int sprd_battery_get_battery_info(struct power_supply *psy, struct sprd_battery_
 	err = sprd_battery_parse_battery_temp_capacity_table(info, battery_np, psy);
 	if (err) {
 		dev_err(&psy->dev, "Fail to get battery temp capacity table, ret = %d\n", err);
+		return err;
+	}
+
+	err = sprd_battery_parse_dischg_battery_temp_capacity_table(info, battery_np, psy);
+	if (err) {
+		dev_err(&psy->dev, "Fail to get dischg battery temp capacity table, ret = %d\n", err);
 		return err;
 	}
 

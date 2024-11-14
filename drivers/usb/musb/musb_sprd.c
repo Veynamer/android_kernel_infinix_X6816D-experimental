@@ -23,6 +23,8 @@
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
+#include <linux/soc/sprd/sprd_usbpinmux.h>
+#include <../../input/touchscreen/ili9882q/tp_usb_notifier.h>
 #include <linux/usb.h>
 #include <linux/usb/phy.h>
 #include <linux/usb/usb_phy_generic.h>
@@ -32,14 +34,16 @@
 
 #include "musb_core.h"
 #include "sprd_musbhsdma.h"
-/*Added by qinjinke@sagereal.com for NVA-2071 exit entermode poweroff begin 2022-11-10*/
-#include <linux/reboot.h>
-/*Added by qinjinke@sagereal.com for NVA-2071 exit entermode poweroff end 2022-11-10*/
+//#include "../../input/touchscreen/nt36xxx/touch.h"
+
 #define DRIVER_DESC "Inventra Dual-Role USB Controller Driver"
 #define MUSB_VERSION "6.0"
 #define DRIVER_INFO DRIVER_DESC ", v" MUSB_VERSION
 
 #define MUSB_RECOVER_TIMEOUT 100
+
+//extern void tp_charge_status_switch(int status);
+
 struct sprd_glue {
 	struct device		*dev;
 	struct platform_device		*musb;
@@ -49,6 +53,7 @@ struct sprd_glue {
 	struct regulator	*vbus;
 	struct wakeup_source	*pd_wake_lock;
 	struct regmap		*pmu;
+	struct gpio_desc *sw;
 
 	enum usb_dr_mode		dr_mode;
 	enum usb_dr_mode		wq_mode;
@@ -58,6 +63,7 @@ struct sprd_glue {
 	struct wakeup_source		*wake_lock;
 	struct work_struct		work;
 	struct delayed_work		recover_work;
+	struct delayed_work		cable_detect_work;
 	struct extcon_dev		*edev;
 	struct extcon_dev		*id_edev;
 	struct notifier_block		hot_plug_nb;
@@ -66,6 +72,7 @@ struct sprd_glue {
 
 	bool		bus_active;
 	bool		vbus_active;
+  	bool        	pre_vbus_active;
 	bool		charging_mode;
 	bool		power_always_on;
 	bool		is_suspend;
@@ -76,8 +83,10 @@ struct sprd_glue {
 };
 
 static int boot_charging;
-
-static void musb_sprd_release_all_request(struct musb *musb);
+static int tp_usb_flag = 0;
+extern int prj_name;	//1: NICO 2: NICKY 3:NICKY-A
+extern void sc27xx_force_dpdm(void);
+extern enum usb_charger_type sgm4154x_charger_redetect(void);
 
 static void sprd_musb_enable(struct musb *musb)
 {
@@ -400,30 +409,6 @@ static struct musb_hdrc_config sprd_musb_hdrc_config = {
 };
 #pragma GCC diagnostic pop
 
-/*Added by qinjinke@sagereal.com for NVA-2071 exit entermode poweroff begin 2022-11-10*/
-static bool boot_cali=0;
-static void musb_sprd_boot_mode_cali(void)
-{
-       struct device_node *np;
-       const char *cmd_line, *s;
-       int ret;
-
-       np = of_find_node_by_path("/chosen");
-       if (!np)
-               return;
-
-       ret = of_property_read_string(np, "bootargs", &cmd_line);
-       if (ret < 0)
-               return;
-
-       s = strstr(cmd_line, "androidboot.mode=cali");
-       if (s != NULL)
-               boot_cali = 1;
-       else
-               boot_cali = 0;
-}
-/*Added by qinjinke@sagereal.com for NVA-2071 exit entermode poweroff end 2022-11-10*/
-
 static int musb_sprd_vbus_notifier(struct notifier_block *nb,
 				unsigned long event, void *data)
 {
@@ -445,6 +430,8 @@ static int musb_sprd_vbus_notifier(struct notifier_block *nb,
 		spin_unlock_irqrestore(&glue->lock, flags);
 		dev_info(glue->dev,
 			"device connection detected from VBUS GPIO.\n");
+		printk("device connection detected from VBUS GPIO.\n");
+		//tp_charge_status_switch(1);
 	} else {
 		spin_lock_irqsave(&glue->lock, flags);
 		if (glue->vbus_active == 0 || glue->dr_mode == USB_DR_MODE_HOST) {
@@ -458,13 +445,15 @@ static int musb_sprd_vbus_notifier(struct notifier_block *nb,
 		glue->wq_mode = USB_DR_MODE_PERIPHERAL;
 		queue_work(system_unbound_wq, &glue->work);
 		spin_unlock_irqrestore(&glue->lock, flags);
-		/*Added by qinjinke@sagereal.com for NVA-2071 exit entermode poweroff begin 2022-11-10*/
-		if(boot_cali == 1){
-			kernel_power_off();
+		if (prj_name == 2 || prj_name == 3)
+		{
+			gpiod_set_value_cansleep(glue->sw, 1);
+			dev_info(glue->dev, "%s %d usb switch on\n", __func__, __LINE__);
 		}
-		/*Added by qinjinke@sagereal.com for NVA-2071 exit entermode poweroff end 2022-11-10*/
 		dev_info(glue->dev,
 			"device disconnect detected from VBUS GPIO.\n");
+		printk("device disconnect detected from VBUS GPIO.\n");
+		//tp_charge_status_switch(0);
 	}
 
 	return 0;
@@ -477,6 +466,9 @@ static int musb_sprd_id_notifier(struct notifier_block *nb,
 	unsigned long flags;
 
 	if (event) {
+		if (prj_name == 2 || prj_name == 3) {
+			gpiod_set_value_cansleep(glue->sw, 0);
+		}
 		spin_lock_irqsave(&glue->lock, flags);
 		if (glue->vbus_active == 1 || glue->dr_mode == USB_DR_MODE_PERIPHERAL) {
 			spin_unlock_irqrestore(&glue->lock, flags);
@@ -484,7 +476,12 @@ static int musb_sprd_id_notifier(struct notifier_block *nb,
 				"ignore host connection detected from ID GPIO.\n");
 			return 0;
 		}
+		//tp in usb mode
+		if(tp_usb_flag == 0){
+			tp_usb_notifier_call_chain(1,NULL);
+			tp_usb_flag = 1;
 
+		}
 		glue->vbus_active = 1;
 		glue->wq_mode = USB_DR_MODE_HOST;
 		queue_work(system_unbound_wq, &glue->work);
@@ -499,11 +496,19 @@ static int musb_sprd_id_notifier(struct notifier_block *nb,
 				"ignore host disconnect detected from ID GPIO.\n");
 			return 0;
 		}
+		//tp out usb mode
+		if(tp_usb_flag == 1){
+			tp_usb_notifier_call_chain(0,NULL);
+			tp_usb_flag = 0;
+		}
 
 		glue->vbus_active = 0;
 		glue->wq_mode = USB_DR_MODE_HOST;
 		queue_work(system_unbound_wq, &glue->work);
 		spin_unlock_irqrestore(&glue->lock, flags);
+		if (prj_name == 2 || prj_name == 3) {
+			gpiod_set_value_cansleep(glue->sw, 1);
+		}
 		dev_info(glue->dev,
 			"host disconnect detected from ID GPIO.\n");
 	}
@@ -538,21 +543,113 @@ static void musb_sprd_detect_cable(struct sprd_glue *glue)
 
 		glue->vbus_active = 1;
 		glue->wq_mode = USB_DR_MODE_PERIPHERAL;
-		queue_work(system_unbound_wq, &glue->work);
+
+		if (prj_name == 2 || prj_name == 3) {
+			schedule_delayed_work(&glue->cable_detect_work,
+				(HZ * 5));
+			pr_err("cable_detect_work ----3S\n");
+		} else {
+			//queue_work(system_unbound_wq, &glue->work);
+			schedule_delayed_work(&glue->cable_detect_work,
+				(HZ * 1));
+			pr_err("cable_detect_work ----1S\n");
+		}
 	}
 	spin_unlock_irqrestore(&glue->lock, flags);
 }
+enum usb_charger_type sprd_hsphy_retry_charger_detect(void);
+static enum usb_charger_type musb_sprd_retry_charger_detect(struct sprd_glue *glue)
+{
+	enum usb_charger_type type = UNKNOWN_TYPE;
+	//struct usb_phy *usb_phy = glue->xceiv;
+	struct musb *musb = platform_get_drvdata(glue->musb);
+	unsigned long flags;
+	u8 pwr;
+	dev_dbg(glue->dev, "%s musb_sprd enter\n", __func__);
+	spin_lock_irqsave(&glue->lock, flags);
+	//glue->retry_charger_detect = true;
+	spin_unlock_irqrestore(&glue->lock, flags);
+	if (!clk_prepare_enable(glue->clk)) {
+		usb_phy_init(glue->xceiv);
+		musb_writeb(musb->mregs, MUSB_INTRUSBE, 0);
+		musb_writeb(musb->mregs, MUSB_INTRTXE, 0);
+		musb_writeb(musb->mregs, MUSB_INTRRXE, 0);
+		pwr = musb_readb(musb->mregs, MUSB_POWER);
+		pwr |= MUSB_POWER_SOFTCONN;
+		musb_writeb(musb->mregs, MUSB_POWER, pwr);
+		type = sprd_hsphy_retry_charger_detect();
+		pwr = musb_readb(musb->mregs, MUSB_POWER);
+		pwr &= ~MUSB_POWER_SOFTCONN;
+		musb_writeb(musb->mregs, MUSB_POWER, pwr);
+		/*  flush pending interrupts */
+		spin_lock_irqsave(&glue->lock, flags);
+		//glue->retry_charger_detect = false;
+		spin_unlock_irqrestore(&glue->lock, flags);
+		musb_readb(musb->mregs, MUSB_INTRUSB);
+		musb_readw(musb->mregs, MUSB_INTRTXE);
+		usb_phy_shutdown(glue->xceiv);
+		clk_disable_unprepare(glue->clk);
+	}
+	return type;
+}
 
+#ifdef VENDOR_KERNEL
 static bool musb_sprd_is_connect_host(struct sprd_glue *glue)
 {
 	struct usb_phy *usb_phy = glue->xceiv;
 	enum usb_charger_type type = usb_phy->charger_detect(usb_phy);
-
+	dev_err(glue->dev, "%s type = %d.\n",__func__, (int)type);
+	if (type == UNKNOWN_TYPE) {
+		if (extcon_get_state(glue->edev, EXTCON_USB)) {
+			type = musb_sprd_retry_charger_detect(glue);
+			dev_err(glue->dev, "%s second detectd type is : %d\n", __func__, (int)type);
+		}
+	}
 	if (type == SDP_TYPE || type == CDP_TYPE)
 		return true;
+	return false;
+}
+#else
+static bool musb_sprd_is_connect_host(struct sprd_glue *glue)
+{
+	struct usb_phy *usb_phy = glue->xceiv;
+	enum usb_charger_type type = usb_phy->chg_type;
+
+
+	if (usb_phy->chg_type == UNKNOWN_TYPE) {
+		type = usb_phy->charger_detect(usb_phy);
+		usb_phy->chg_type = type;
+	}
+
+	dev_err(glue->dev, "%s type = %d, prj_name = %d, gpio_sw = %d\n", __func__, (int)type, prj_name, gpiod_get_value_cansleep(glue->sw));
+
+	if (prj_name == 2 || prj_name == 3) {
+		if (type == UNKNOWN_TYPE) {
+			if (extcon_get_state(glue->edev, EXTCON_USB)) {
+				pr_err("musb_sprd_is_connect_host charger redetct\n");
+				type = sgm4154x_charger_redetect();
+				usb_phy->chg_type = type;
+			}
+		}
+		if (type == SDP_TYPE || type == CDP_TYPE) {
+			gpiod_set_value_cansleep(glue->sw, 0);
+			dev_info(glue->dev, "%s %d usb switch off\n", __func__, __LINE__);
+			return true;
+		}
+		return false;
+	}
+	else {
+		if (type == UNKNOWN_TYPE) {
+			if (extcon_get_state(glue->edev, EXTCON_USB))
+				type = musb_sprd_retry_charger_detect(glue);
+		}
+		if (type == SDP_TYPE || type == CDP_TYPE)
+			return true;
+	}
 
 	return false;
 }
+#endif
 
 static void musb_sprd_charger_mode(void)
 {
@@ -593,6 +690,17 @@ static void sprd_musb_recover_work(struct work_struct *work)
 	schedule_work(&glue->work);
 }
 
+static void sprd_cable_detect_work(struct work_struct *work)
+{
+	struct sprd_glue *glue = container_of(work,
+				 struct sprd_glue, cable_detect_work.work);
+
+	dev_info(glue->dev, "sprd_cable_detect_work\n");
+
+	queue_work(system_unbound_wq, &glue->work);
+}
+
+
 static void sprd_musb_reset_context(struct musb *musb)
 {
 	int i;
@@ -624,6 +732,20 @@ static void sprd_musb_work(struct work_struct *work)
 	spin_unlock_irqrestore(&glue->lock, flags);
 	if (current_mode == USB_DR_MODE_UNKNOWN)
 		return;
+
+        /*
+         * When the plug-in speed is too fast, the number of interrupts is
+         * much greater than the work processing mechanism.When the USB state
+         * is consistent with the last time,maintain the last state,otherwise
+         * wait for musb controller enter suspend failed will appear
+         */
+  	 if (glue->pre_vbus_active == current_state) {
+           	 /* Same mode value may cause function exception */
+           	 dev_err(glue->dev, "Same vbus_active: mode(%d %d), state(%d %d)\n",
+                 glue->dr_mode, current_mode,glue->pre_vbus_active, current_state);
+           	 return;
+         }
+  	 glue->pre_vbus_active = current_state;
 
 	/*
 	 * There is a hidden danger, when system is going to suspend.
@@ -664,6 +786,10 @@ static void sprd_musb_work(struct work_struct *work)
 			goto end;
 		}
 
+		if (glue->dr_mode == USB_DR_MODE_PERIPHERAL)
+			usb_gadget_set_state(&musb->g, USB_STATE_ATTACHED);
+
+		sprd_musb_reset_context(musb);
 		/*
 		 * If the charger type is not SDP or CDP type, it does
 		 * not need to resume the device, just charging.
@@ -678,13 +804,6 @@ static void sprd_musb_work(struct work_struct *work)
 			 "Don't need resume musb device in charging mode!\n");
 			goto end;
 		}
-		/* For charging mode, we don't set usb state to USB_STATE_ATTACHED
-		 * to ignore unnecessary interaction
-		 */
-		if (glue->dr_mode == USB_DR_MODE_PERIPHERAL)
-			usb_gadget_set_state(&musb->g, USB_STATE_ATTACHED);
-
-		sprd_musb_reset_context(musb);
 
 		cnt = 100;
 		while (!pm_runtime_suspended(musb->controller)
@@ -774,19 +893,38 @@ static void sprd_musb_work(struct work_struct *work)
 			musb_writeb(musb->mregs, MUSB_DEVCTL,
 				devctl & ~MUSB_DEVCTL_SESSION);
 			musb->shutdowning = 1;
-			/* release request and disable ep before controller suspend */
-			musb_sprd_release_all_request(musb);
 			cnt = 10;
 			while (musb->shutdowning && cnt-- > 0)
 				msleep(50);
 		}
 
-		if (glue->dr_mode == USB_DR_MODE_HOST && glue->vbus) {
-			ret = regulator_disable(glue->vbus);
-			if (ret) {
+		if (glue->dr_mode == USB_DR_MODE_HOST) {
+			if(glue->vbus){
+				ret = regulator_disable(glue->vbus);
+				if (ret) {
+					dev_err(glue->dev,
+						"Failed to disable vbus: %d\n", ret);
+					goto end;
+				}
+			}else{
 				dev_err(glue->dev,
-					"Failed to disable vbus: %d\n", ret);
-				goto end;
+						"fix vbus supply NULL,get and disable\n");
+				glue->vbus = devm_regulator_get(glue->dev, "vbus");
+				if (IS_ERR(glue->vbus)) {
+					dev_err(glue->dev,
+						"unable to get vbus supply\n");
+					glue->vbus = NULL;
+					goto end;
+				}
+                          	if(regulator_is_enabled(glue->vbus)){
+					ret = regulator_disable(glue->vbus);
+                                        if (ret) {
+                                                dev_err(glue->dev,
+                                                        "Failed to disable vbus: %d\n", ret);
+                                                goto end;
+                                        }
+                                }
+				glue->vbus = NULL;
 			}
 		}
 
@@ -935,6 +1073,11 @@ static int musb_sprd_probe(struct platform_device *pdev)
 	u32 buf[2];
 	int ret;
 
+	if (sprd_usbmux_check_mode() == MUX_MODE) {
+		dev_info(&pdev->dev, "musb driver stop probe since usb mux jtag\n");
+		return -ENODEV;
+	}
+
 	glue = devm_kzalloc(&pdev->dev, sizeof(*glue), GFP_KERNEL);
 	if (!glue)
 		return -ENOMEM;
@@ -986,9 +1129,16 @@ static int musb_sprd_probe(struct platform_device *pdev)
 		glue->usb_pub_slp_poll_mask = buf[1];
 	}
 
+	if (prj_name == 2 || prj_name == 3) {
+		glue->sw = devm_gpiod_get_index(&pdev->dev, "usb-sw", 0, GPIOD_OUT_LOW);
+		gpiod_set_value_cansleep(glue->sw, 1);
+		dev_info(glue->dev, "%s %d usb switch on\n", __func__, __LINE__);
+	}
+
 	spin_lock_init(&glue->lock);
 	INIT_WORK(&glue->work, sprd_musb_work);
 	INIT_DELAYED_WORK(&glue->recover_work, sprd_musb_recover_work);
+	INIT_DELAYED_WORK(&glue->cable_detect_work, sprd_cable_detect_work);
 
 	platform_set_drvdata(pdev, glue);
 
@@ -1077,9 +1227,6 @@ static int musb_sprd_probe(struct platform_device *pdev)
 	pm_runtime_set_active(dev);
 	pm_runtime_enable(dev);
 	musb_sprd_charger_mode();
-	/*Added by qinjinke@sagereal.com for NVA-2071 exit entermode poweroff begin 2022-11-10*/
-	musb_sprd_boot_mode_cali();
-	/*Added by qinjinke@sagereal.com for NVA-2071 exit entermode poweroff end 2022-11-10*/
 	musb_sprd_detect_cable(glue);
 
 	return 0;
@@ -1266,6 +1413,8 @@ static int musb_sprd_runtime_suspend(struct device *dev)
 	int ret;
 
 	usb_phy_vbus_off(glue->xceiv);
+	if (glue->dr_mode == USB_DR_MODE_PERIPHERAL)
+		musb_sprd_release_all_request(musb);
 
 	if (glue->dr_mode == USB_DR_MODE_HOST) {
 		ret = wait_event_timeout(controller->wait,
@@ -1294,7 +1443,7 @@ static int musb_sprd_runtime_resume(struct device *dev)
 	struct musb *musb = platform_get_drvdata(glue->musb);
 
 	clk_prepare_enable(glue->clk);
-	glue->suspending = false;
+//	glue->suspending = false;
 
 	if (!musb->shutdowning)
 		usb_phy_init(glue->xceiv);
@@ -1314,6 +1463,7 @@ static int musb_sprd_runtime_resume(struct device *dev)
 	}
 
 	dev_info(dev, "enter into resume mode\n");
+	glue->suspending = false;
 	return 0;
 }
 

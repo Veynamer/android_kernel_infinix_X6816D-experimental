@@ -666,21 +666,14 @@ static int wcn_sipc_sblk_push(u8 index,
 			struct mbuf_t *head, struct mbuf_t *tail, int num)
 {
 	struct sipc_chn_info *sipc_chn;
-	int check_count = 0;
 
 	if (unlikely(SIPC_INVALID_CHN(index)))
 		return -E_INVALIDPARA;
 
+	if (wcn_sipc_sblk_chn_rx_status_check(index))
+		return -E_INVALIDPARA;
+
 	sipc_chn = SIPC_CHN(index);
-	while (wcn_sipc_sblk_chn_rx_status_check(index) != 0) {
-		WCN_INFO("sipc chn %d wait create ,index %d !\n", sipc_chn->chn, index);
-		msleep(30);
-		check_count++;
-		if (check_count >= 100) {
-			WCN_ERR("sipc chn %d not created!", sipc_chn->chn);
-			return -E_INVALIDPARA;
-		}
-	}
 	wcn_sipc_record_mbuf_recv_from_user(index, num);
 	wcn_sipc_push_list_enqueue(sipc_chn, head, tail, num);
 	wcn_sipc_wakeup_tx(sipc_chn);
@@ -717,22 +710,11 @@ static void wcn_sipc_sblk_recv(struct sipc_chn_info *sipc_chn)
 void wcn_sipc_chn_set_status(void *data, bool flag)
 {
 	struct sipc_chn_info *sipc_chn = (struct sipc_chn_info *)data;
-	WCN_INFO("wcn_sipc_chn_set_status chn: %d ,  flag:%d\n", sipc_chn->chn, flag);
+
 	if (flag)
 		sipc_chn->sipc_chn_status = true;
 	else
 		sipc_chn->sipc_chn_status = false;
-}
-
-void wcn_sipc_chn_set_status_all_false(void)
-{
-	int index;
-
-	for (index = 0; index < SIPC_CHN_NUM; index++) {
-		if (g_sipc_chn[index].dst != SIPC_WCN_DST)
-			continue;
-		wcn_sipc_chn_set_status(&g_sipc_chn[index], false);
-	}
 }
 
 static void wcn_sipc_sblk_notifer(int event, void *data)
@@ -741,7 +723,7 @@ static void wcn_sipc_sblk_notifer(int event, void *data)
 
 	if (unlikely(!sipc_chn))
 		return;
-	WCN_INFO("%s  %d index:%d  event:%x",
+	WCN_DEBUG("%s  %d index:%d  event:%x",
 		  __func__, __LINE__, sipc_chn->index, event);
 	switch (event) {
 	case SBLOCK_NOTIFY_RECV:
@@ -970,20 +952,19 @@ static int wcn_sipc_chn_deinit(struct mchn_ops_t *ops)
 	struct sipc_chn_info *sipc_chn;
 
 	sipc_chn = SIPC_CHN(idx);
-	sipc_chn->ops = NULL;
-	WCN_INFO("[%s]:index[%d] chn[%d], sipc_chn->ops = null.\n", __func__, idx, sipc_chn->chn);
+	WCN_INFO("[%s]:index[%d] chn[%d]\n", __func__, idx, sipc_chn->chn);
 
 	bus_chn_deinit(ops);
-	/* only destroy when chn created fail so it can create again.  */
+
 	if (SIPC_CHN_TYPE_SBLK(idx)) {
-		if (SIPC_CHN_DIR_TX(idx) && wcn_sipc_sblk_chn_rx_status_check(idx) != 0) {
+		if (SIPC_CHN_STATUS(sipc_chn->chn) == SIPC_CHANNEL_CREATED) {
+
 			sblock_destroy(sipc_chn->dst, sipc_chn->chn);
 			SIPC_CHN_STATUS(sipc_chn->chn) = SIPC_CHANNEL_UNCREATED;
-			WCN_INFO("sipc chn[%d] deinit and destroy!\n", idx);
 		}
 	}
 
-	/* for chn created success,we don't release sipc resource for now */
+	/* don't release sipc resource for now */
 	WCN_INFO("sipc chn[%d] deinit success!\n", idx);
 
 	return 0;
@@ -1048,51 +1029,6 @@ static int wcn_sipc_parse_dt(void)
 	WCN_INFO("wcn-sipc-ver:%d\n", g_sipc_info.sipc_wcn_version);
 
 	return ret;
-}
-
-
-int wcn_sipc_mdbg_debug_show(void)
-{
-	struct sipc_chn_info *sipc_chn;
-	int i;
-
-	WCN_INFO("sipc chn info\n");
-	WCN_INFO("************************************\n");
-	for (i = 0; i < SIPC_CHN_NUM; i++) {
-			sipc_chn = SIPC_CHN(i);
-		if (!sipc_chn || !sipc_chn->chn)
-			continue;
-		WCN_INFO("index:%d inout:%d chntype:%d channel: %d",
-			sipc_chn->index,
-			sipc_chn->inout,
-			sipc_chn->chntype,
-			sipc_chn->chn);
-		WCN_INFO("chn_status %d pushq_num %d popq_num %d\n",
-			sipc_chn->sipc_chn_status,
-			sipc_chn->push_queue.mbuf_num,
-			sipc_chn->pop_queue.mbuf_num);
-	}
-	WCN_INFO("sipc chn statics info\n");
-	WCN_INFO("************************************\n");
-	for (i = 0; i < SIPC_CHN_NUM; i++) {
-			sipc_chn = SIPC_CHN(i);
-		if (!sipc_chn || !sipc_chn->chn)
-			continue;
-		WCN_INFO("\tindex:%.8u", sipc_chn->index);
-		WCN_INFO("\tuser_send %.8lld\tgivebackto_user %.8lld",
-			sipc_chn->chn_static.mbuf_recv_from_user,
-			sipc_chn->chn_static.mbuf_giveback_to_user);
-		WCN_INFO("\tbus_send %.8lld \tbus_recv %.8lld",
-			sipc_chn->chn_static.mbuf_send_to_bus,
-			sipc_chn->chn_static.mbuf_recv_from_bus);
-		WCN_INFO("\tmbuf_alloc %.8lld \tmbuf_free %.8lld",
-			sipc_chn->chn_static.mbuf_alloc_num,
-			sipc_chn->chn_static.mbuf_free_num);
-		WCN_INFO("\tbuf_alloc %.8lld \tbuf_free %.8lld\n",
-			sipc_chn->chn_static.buf_alloc_num,
-			sipc_chn->chn_static.buf_free_num);
-	}
-	return 0;
 }
 
 #if defined(CONFIG_DEBUG_FS)

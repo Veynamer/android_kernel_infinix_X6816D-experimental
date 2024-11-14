@@ -377,7 +377,7 @@ static inline enum sprdwl_mode type_to_mode(enum nl80211_iftype type, char *name
 
 	return mode;
 }
-extern struct sprdwl_intf *g_intf;
+
 int sprdwl_init_fw(struct sprdwl_vif *vif)
 {
 	struct sprdwl_priv *priv = vif->priv;
@@ -386,7 +386,6 @@ int sprdwl_init_fw(struct sprdwl_vif *vif)
 	u8 *mac;
 	u8 vif_ctx_id = 0;
 	u8 mode_opened = 0;
-  	struct sprdwl_intf *intf = g_intf;
 
 	netdev_info(vif->ndev, "%s type %d, mode %d\n", __func__, type,
 		    vif->mode);
@@ -434,11 +433,6 @@ int sprdwl_init_fw(struct sprdwl_vif *vif)
 		    __func__, type,
 		    vif->mode, vif->ctx_id);
 	priv->fw_stat[vif->mode] = SPRDWL_INTF_OPEN;
-
-	if (atomic_read(&intf->change_iface_block_cmd) == 1) {
-		netdev_info(vif->ndev, "block command finished!, reset change_iface_block_cmd!\n");
-		atomic_set(&intf->change_iface_block_cmd, 0);
-        }
 	/*TODO make sure driver send buf only once*/
 	for (mode = SPRDWL_MODE_STATION; mode < SPRDWL_MODE_MAX; mode++)
 		if (priv->fw_stat[mode] == SPRDWL_INTF_OPEN)
@@ -552,21 +546,11 @@ static int sprdwl_cfg80211_del_iface(struct wiphy *wiphy,
 {
 	struct sprdwl_priv *priv = wiphy_priv(wiphy);
 	struct sprdwl_vif *vif = NULL, *tmp_vif = NULL;
-	struct sprdwl_intf *intf;
 
-	if (!priv) {
-		wl_err("can not get priv!\n");
-		return -ENODEV;
-	}
-	intf = (struct sprdwl_intf *)(priv->hw_priv);
-
-	if (intf->remove_flag == 1) {
+	if (sprdwl_intf_is_exit(priv)) {
 		wiphy_err(wiphy, "%s driver removing!\n", __func__);
 		return 0;
 	}
-	if (sprdwl_intf_is_exit(priv) || intf->cp_asserted)
-		wl_info("del interface while assert\n");
-
 	spin_lock_bh(&priv->list_lock);
 	list_for_each_entry_safe(vif, tmp_vif, &priv->vif_list, vif_node) {
 		if (&vif->wdev == wdev) {
@@ -590,7 +574,6 @@ static int sprdwl_cfg80211_change_iface(struct wiphy *wiphy,
 {
 	struct sprdwl_vif *vif = netdev_priv(ndev);
 	enum nl80211_iftype old_type = vif->wdev.iftype;
-	struct sprdwl_intf *intf = g_intf;
 	int ret;
 
 	netdev_info(ndev, "%s type %d -> %d\n", __func__, old_type, type);
@@ -603,24 +586,12 @@ static int sprdwl_cfg80211_change_iface(struct wiphy *wiphy,
 	if (vif->mode == 0 && ((old_type == NL80211_IFTYPE_STATION && type == NL80211_IFTYPE_AP) ||
 			(old_type == NL80211_IFTYPE_AP && type == NL80211_IFTYPE_STATION))) {
 		pr_info("%s change iface but current mode 0!\n", __func__);
-		pr_info("%s power on wcn (%d time)\n", __func__, atomic_read(&intf->power_cnt));
-		ret = sprdwl_chip_set_power(intf, true);
-		if (ret)
-			return ret;
-
-		pr_info("start to send open softap cmd\n");
 		vif->wdev.iftype = type;
 		ret = sprdwl_init_fw(vif);
 		if (!ret && type == NL80211_IFTYPE_AP)
 			netif_carrier_off(ndev);
 		return ret;
 	}
-
-	if (atomic_read(&intf->power_cnt) == 1) {
-		netdev_info(ndev, "power cnt is 1, block command!\n");
-		atomic_set(&intf->change_iface_block_cmd, 1);
-	}
-
 	ret = sprdwl_uninit_fw(vif);
 	if (!ret) {
 		vif->wdev.iftype = type;
@@ -628,9 +599,6 @@ static int sprdwl_cfg80211_change_iface(struct wiphy *wiphy,
 		if (ret)
 			vif->wdev.iftype = old_type;
 	}
-
-	if (!ret && type == NL80211_IFTYPE_AP)
-		netif_carrier_off(ndev);
 
 	return ret;
 }
@@ -1513,7 +1481,7 @@ static int sprdwl_cfg80211_scan(struct wiphy *wiphy,
 	if (vif->mode == SPRDWL_MODE_STATION ||
 		vif->mode == SPRDWL_MODE_STATION_SECOND) {
 		random_mac_addr(rand_addr);
-		if ((flags & NL80211_SCAN_FLAG_RANDOM_ADDR) && (priv->rand_mac_flag == 0)) {
+		if (flags & NL80211_SCAN_FLAG_RANDOM_ADDR) {
 			random_mac_flag = 1;
 			wl_err("random mac addr: %pM\n", rand_addr);
 		} else {
@@ -1651,29 +1619,10 @@ static void sprdwl_cfg80211_abort_scan(struct wiphy *wiphy,
 			container_of(wdev, struct sprdwl_vif, wdev);
 	struct api_version_t *api = (&priv->sync_api)->api_array;
 	u8 fw_ver = 0, drv_ver = 0;
-	struct sprdwl_intf *intf;
 
 	fw_ver = (api + WIFI_CMD_SCAN)->fw_version;
 	drv_ver = (api + WIFI_CMD_SCAN)->drv_version;
 	fw_ver = min(fw_ver, drv_ver);
-
-	if (!priv) {
-		wl_err("can not get priv!\n");
-		return;
-	}
-
-	intf = (struct sprdwl_intf *)(priv->hw_priv);
-
-	if (sprdwl_intf_is_exit(priv) || intf->cp_asserted) {
-		wl_info("%s assert happened!\n", __func__);
-		if (vif->mode == SPRDWL_MODE_P2P_DEVICE) {
-			wl_info("p2p device need cancel scan\n");
-			sprdwl_scan_done(vif, true);
-			wl_info("%s p2p device cancel scan finished!\n",
-				__func__);
-		}
-	}
-
 	if (fw_ver < 3) {
 		wl_err("%s Abort scan not support.\n", __func__);
 		return;
@@ -1909,7 +1858,7 @@ static int sprdwl_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev,
 		int i;
 
 		netdev_info(ndev, "set assoc req ie, len %zx\n", sme->ie_len);
-		for (i = 0; i < sme->ie_len - 6; i++) {
+		for (i = 0; (sme->ie_len > 6) && (i < sme->ie_len - 6); i++) {
 			if (sme->ie[i] == 0xDD &&
 			    sme->ie[i + 2] == 0x40 &&
 			    sme->ie[i + 3] == 0x45 &&
@@ -2886,14 +2835,9 @@ static int sprdwl_cfg80211_start_p2p_device(struct wiphy *wiphy,
 					    struct wireless_dev *wdev)
 {
 	struct sprdwl_vif *vif = container_of(wdev, struct sprdwl_vif, wdev);
-	struct sprdwl_intf *intf = g_intf;
-	int ret;
 
-	netdev_info(vif->ndev, "%s power on wcn (%d time)\n",
-			__func__, atomic_read(&intf->power_cnt));
-	ret = sprdwl_chip_set_power(intf, true);
-	if (ret)
-		return ret;
+	netdev_info(vif->ndev, "%s\n", __func__);
+
 	return sprdwl_init_fw(vif);
 }
 
@@ -2901,23 +2845,13 @@ static void sprdwl_cfg80211_stop_p2p_device(struct wiphy *wiphy,
 					    struct wireless_dev *wdev)
 {
 	struct sprdwl_vif *vif = container_of(wdev, struct sprdwl_vif, wdev);
-	struct sprdwl_intf *intf = g_intf;
 
 	netdev_info(vif->ndev, "%s\n", __func__);
-
-	if (atomic_read(&intf->power_cnt) == 1)
-		atomic_set(&intf->block_cmd_after_close, 1);
 
 	sprdwl_uninit_fw(vif);
 
 	if (vif->priv->scan_request)
 		sprdwl_scan_done(vif, true);
-	netdev_info(vif->ndev, "%s power off wcn (%d time)\n",
-			__func__, atomic_read(&intf->power_cnt));
-	sprdwl_chip_set_power(intf, false);
-
-	if (atomic_read(&intf->block_cmd_after_close) == 1)
-		atomic_set(&intf->block_cmd_after_close, 0);
 }
 
 static int sprdwl_cfg80211_tdls_mgmt(struct wiphy *wiphy,

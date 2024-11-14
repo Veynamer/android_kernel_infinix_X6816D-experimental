@@ -280,10 +280,6 @@ int dev_pm_opp_of_add_table_binning(int cluster,
 
 	pr_err("opp_string[%s]\n", opp_string);
 
-	if (!strcmp(opp_string, "operating-points-SC9863A1") ||
-	    strstr(opp_string, "operating-points-SC9863A1-4"))
-		cdata->optimize_judge = true;
-
 	prop = of_find_property(np_cpufreq, opp_string, NULL);
 	if (!prop || !prop->value) {
 		pr_err("%s: not found opp_string\n", __func__);

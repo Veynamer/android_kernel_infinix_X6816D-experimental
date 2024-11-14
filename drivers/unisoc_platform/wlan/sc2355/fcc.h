@@ -13,8 +13,8 @@
 #define __FCC_H__
 
 #define MAX_PHY_MODE	7
-#define MAX_POWER_BACKOFF_RULE	20
-#define MAX_FCC_COUNTRY_NUM	6
+#define MAX_POWER_BACKOFF_RULE	100
+#define MAX_FCC_COUNTRY_NUM	70
 
 struct sprd_priv;
 

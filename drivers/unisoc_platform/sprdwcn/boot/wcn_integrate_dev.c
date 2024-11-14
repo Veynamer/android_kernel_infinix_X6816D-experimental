@@ -366,7 +366,7 @@ static void marlin_write_efuse_data(void)
 	/* copy efuse data to target ddr address */
 	if (wcn_platform_chip_type() == WCN_PLATFORM_TYPE_QOGIRL6) {
 		phy_addr = s_wcn_device.btwf_device->base_addr +
-		   (phys_addr_t)&qogirl6_s_wssm_phy_offset_p->efuse[0];
+		   (phys_addr_t)&qogirl6_s_wssm_phy_offset_p->wifi.efuse[0];
 	} else {
 		phy_addr = s_wcn_device.btwf_device->base_addr +
 		   (phys_addr_t)&s_wssm_phy_offset_p->wifi.efuse[0];
@@ -1203,10 +1203,8 @@ static void wcn_probe_power_wq(struct work_struct *work)
 	}
 
 	/* BTWF SYS calibration time consumption is about 250 ms */
-	if (wcn_platform_chip_type() == WCN_PLATFORM_TYPE_QOGIRL6) {
-		wcn_reset_mdbg_notifier_init();
+	if (wcn_platform_chip_type() == WCN_PLATFORM_TYPE_QOGIRL6)
 		msleep(WCCN_BTWF_CALIBRATION_TIME);
-	}
 
 	if (stop_marlin(MARLIN_MDBG))
 		WCN_ERR("%s power down failed\n", __func__);
@@ -1358,7 +1356,7 @@ void wcn_shutdown(struct platform_device *pdev)
 			open_status = wcn_dev->wcn_open_status;
 			for (subsys_bit = 0; subsys_bit < 32; subsys_bit++) {
 				if (open_status & (0x1<<subsys_bit))
-					ret = stop_marlin(subsys_bit);
+					ret = stop_marlin(0x1<<subsys_bit);
 				if (ret)
 					WCN_ERR("stop_marlin ret: %d\n", ret);
 			}

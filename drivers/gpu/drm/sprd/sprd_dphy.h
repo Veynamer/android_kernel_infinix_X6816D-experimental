@@ -28,6 +28,7 @@ struct dphy_context {
 	u8 id;
 	u8 capability;
 	u32 chip_id;
+	u8 dphy_ta_get_val;
 };
 
 struct dphy_pll_ops {
@@ -101,4 +102,5 @@ extern const struct dphy_glb_ops sharkl5_dphy_glb_ops;
 extern const struct dphy_glb_ops sharkl5pro_dphy_glb_ops;
 extern const struct dphy_glb_ops qogirl6_dphy_glb_ops;
 extern const struct dphy_glb_ops qogirn6pro_dphy_glb_ops;
+void cali_dphy_glb_disable(struct dphy_context *ctx);
 #endif /* _SPRD_DPHY_H_ */

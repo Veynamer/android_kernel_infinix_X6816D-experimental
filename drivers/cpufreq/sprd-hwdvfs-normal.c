@@ -150,6 +150,33 @@ static struct i2c_driver sprd_cpudvfs_i2c_driver[] = {
 	}
 };
 
+static void sprd_cpudvfs_get_supply_mode(char *dcdc_supply)
+{
+	struct device_node *cmdline_node;
+	const char *cmd_line, *dcdc_type, *ver_str = "-v1";
+	int value = -1, ret;
+
+	cmdline_node = of_find_node_by_path("/chosen");
+	ret = of_property_read_string(cmdline_node, "bootargs", &cmd_line);
+
+	if (ret) {
+		pr_err("Fail to find cmdline bootargs property\n");
+		return;
+	}
+
+	dcdc_type = strstr(cmd_line, "power.from.extern=");
+	if (!dcdc_type) {
+		pr_info("no property power.from.extern found\n");
+		return;
+	}
+
+	sscanf(dcdc_type, "power.from.extern=%d", &value);
+	if (value)
+		return;
+
+	strcat(dcdc_supply, ver_str);
+}
+
 static
 void cpudvfs_bits_update(struct cpudvfs_device *pdev, u32 reg, u32 msk, u32 val)
 {
@@ -354,8 +381,13 @@ int sprd_dvfs_third_pmic_enable(struct cpudvfs_device *pdev, u32 num)
 
 	regdata = &manager->third_pmic_cfg[num];
 
-	ret = regmap_update_bits(pdev->topdvfs_map, regdata->reg,
-				 BIT(regdata->off), BIT(regdata->off));
+	if (pdev->pwr[num].i2c_used)
+		ret = regmap_update_bits(pdev->topdvfs_map, regdata->reg,
+					 BIT(regdata->off), BIT(regdata->off));
+	else
+		ret = regmap_update_bits(pdev->topdvfs_map, regdata->reg,
+					 BIT(regdata->off), ~BIT(regdata->off));
+
 	if (ret)
 		return ret;
 
@@ -1417,6 +1449,7 @@ mpll_free:
 static int sprd_dcdc_dt_parse(struct cpudvfs_device *pdev)
 {
 	struct device_node *node, *dcdc_node = NULL, *cfg_node = NULL;
+	char dcdc_supply[64] = "dcdc-cpu-dvfs-cfg";
 	int nr, ix;
 	struct regmap *map;
 	int ret;
@@ -1471,7 +1504,12 @@ static int sprd_dcdc_dt_parse(struct cpudvfs_device *pdev)
 			goto err_power_free;
 		}
 
-		cfg_node = of_parse_phandle(dcdc_node, "dcdc-cpu-dvfs-cfg", 0);
+		if (of_property_read_bool(dcdc_node, "sprd,multi-supply"))
+			sprd_cpudvfs_get_supply_mode(dcdc_supply);
+
+		dev_info(pdev->dev, "dcdc-cpu%d supply[%s]\n", ix, dcdc_supply);
+
+		cfg_node = of_parse_phandle(dcdc_node, dcdc_supply, 0);
 		if (!cfg_node) {
 			dev_err(pdev->dev, "no dvfs dcdc configure found\n");
 			ret = -EINVAL;

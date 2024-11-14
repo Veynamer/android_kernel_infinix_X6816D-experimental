@@ -411,8 +411,6 @@
 
 				/*nvmem-cells = <&gpu_bin>;
 				nvmem-cell-names = "gpu_bin";*/
-				nvmem-cells = <&cpu_flag>;
-				nvmem-cell-names = "cpu_flag";
 
 				operating-points = <
 					/* kHz    uV */
@@ -893,6 +891,9 @@
 				vsp-domain-eb-syscon = <&aon_apb_regs
 					REG_AON_APB_RF_APB_EB1
 					MASK_AON_APB_RF_AP_SYST_EB>;
+				vsp-dev-eb-syscon = <&ap_ahb_regs
+					REG_AP_AHB_RF_AHB_EB
+					MASK_AP_AHB_RF_VSP_EB>;
 				iommus = <&iommu_vsp>;
 				power-domains = <&vsp_pd>;
 				status = "disabled";
@@ -1651,20 +1652,6 @@
 				multipoint = "true";
 				wakeup-source;
 			};
-
-			socid: socid@402e00e0{
-				compatible = "sprd,soc-id";
-				chip_id = <&aon_apb_regs REG_AON_APB_RF_AON_CHIP_ID0
-						MASK_AON_APB_RF_AON_CHIP_ID0>;
-				plat_id = <&aon_apb_regs REG_AON_APB_RF_AON_PLAT_ID0
-						MASK_AON_APB_RF_AON_PLAT_ID0>;
-				implement_id = <&aon_apb_regs REG_AON_APB_RF_AON_IMPL_ID
-						MASK_AON_APB_RF_AON_IMPL_ID>;
-				manufacture_id = <&aon_apb_regs  REG_AON_APB_RF_AON_MFT_ID
-					MASK_AON_APB_RF_AON_MFT_ID>;
-				version_id = <&aon_apb_regs REG_AON_APB_RF_AON_VER_ID
-						MASK_AON_APB_RF_AON_VER_ID>;
-			};
 		};
 
 		agcp {
@@ -2182,10 +2169,6 @@
 		thm2_sen0: thm2-sen0@3f {
 			reg = <0x3f 0x1>;
 			bits = <0 8>;
-		};
-
-		cpu_flag: cpu-flag@50{
-			reg = <0x50 0x4>;
 		};
 
 		dvfs_bin_cpu0: dvfs-bin@17 {

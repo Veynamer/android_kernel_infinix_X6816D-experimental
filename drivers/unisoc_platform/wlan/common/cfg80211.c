@@ -63,41 +63,55 @@ static char p2p_action_name[][32] = {
 void sprd_dump_frame_prot_info(int send, int freq, const unsigned char *buf,
 			       int len)
 {
-	int idx = 0;
-	int type = ((*buf) & IEEE80211_FCTL_FTYPE) >> 2;
-	int subtype = ((*buf) & IEEE80211_FCTL_STYPE) >> 4;
+	int idx = 0, type, subtype;
 	int action, action_subtype;
 	char print_buf[PRINT_BUF_LEN] = { 0 };
 	char *p = print_buf;
 
-	idx += sprintf(p + idx, "[cfg80211] ");
+	if (len < 16)
+		return;
+	type = ((*buf) & IEEE80211_FCTL_FTYPE) >> 2;
+	subtype = ((*buf) & IEEE80211_FCTL_STYPE) >> 4;
+
+	idx += snprintf(p + idx, PRINT_BUF_LEN - idx, "[cfg80211] ");
+
 
 	if (send)
-		idx += sprintf(p + idx, "SEND: ");
+		idx += snprintf(p + idx, PRINT_BUF_LEN - idx, "SEND: ");
 	else
-		idx += sprintf(p + idx, "RECV: ");
+		idx += snprintf(p + idx, PRINT_BUF_LEN - idx, "RECV: ");
 
 	if (type == IEEE80211_FTYPE_MGMT) {
-		idx += sprintf(p + idx, "%dMHz, %s, ",
-			       freq, type_name[subtype]);
+		idx += snprintf(p + idx, PRINT_BUF_LEN - idx, "%dMHz, %s, ",
+				freq, type_name[subtype]);
 	} else {
-		idx += sprintf(p + idx,
-			       "%dMHz, not mgmt frame, type=%d, ", freq, type);
+		idx += snprintf(p + idx, PRINT_BUF_LEN - idx,
+				"%dMHz, not mgmt frame, type=%d, ", freq, type);
 	}
 
 	if (subtype == ACTION_TYPE) {
+		if (len < MAC_LEN)
+			goto out;
 		action = *(buf + MAC_LEN);
-		action_subtype = *(buf + ACTION_SUBTYPE_OFFSET);
-		if (action == PUB_ACTION)
-			idx += sprintf(p + idx, "PUB:%s ",
-				       pub_action_name[action_subtype]);
-		else if (action == P2P_ACTION)
-			idx += sprintf(p + idx, "P2P:%s ",
-				       p2p_action_name[action_subtype]);
-		else
-			idx += sprintf(p + idx, "Unknown ACTION(0x%x)", action);
+		if ((action == PUB_ACTION) && (len >= ACTION_SUBTYPE_OFFSET)) {
+			action_subtype = *(buf + ACTION_SUBTYPE_OFFSET);
+			if (action_subtype < ARRAY_SIZE(pub_action_name))
+				idx += snprintf(p + idx, PRINT_BUF_LEN - idx, "PUB:%s ",
+						pub_action_name[action_subtype]);
+		} else if ((action == P2P_ACTION) && (len >= ACTION_SUBTYPE_OFFSET)) {
+			action_subtype = *(buf + ACTION_SUBTYPE_OFFSET);
+			if (action_subtype < ARRAY_SIZE(p2p_action_name))
+				idx += snprintf(p + idx, PRINT_BUF_LEN - idx, "P2P:%s ",
+						p2p_action_name[action_subtype]);
+		} else {
+			idx += snprintf(p + idx, PRINT_BUF_LEN - idx,
+					"Unknown ACTION(0x%x)", action);
+		}
 	}
-	p[idx] = '\0';
+
+out:
+	if (idx < PRINT_BUF_LEN)
+		p[idx] = '\0';
 
 	pr_debug("%s %pM %pM\n", p, &buf[4], &buf[10]);
 }
@@ -128,8 +142,10 @@ static void cfg80211_do_work(struct work_struct *work)
 		spin_unlock_bh(&priv->work_lock);
 
 		vif = sprd_work->vif;
-		netdev_dbg(vif->ndev, "process delayed work: %d\n",
-			   sprd_work->id);
+		if (vif)
+			netdev_dbg(vif->ndev, "process delayed work: %d\n", sprd_work->id);
+		else
+			pr_debug("process delayed work: %d\n", sprd_work->id);
 
 		switch (sprd_work->id) {
 		case SPRD_WORK_REG_MGMT:
@@ -190,6 +206,55 @@ static void cfg80211_deinit_work(struct sprd_priv *priv)
 
 	destroy_workqueue(priv->common_workq);
 }
+
+#ifdef DRV_RESET_SELF
+static int cfg80211_host_reset_self(struct sprd_priv *priv)
+{
+	struct sprd_hif *hif = &priv->hif;
+
+	if (hif->ops->reset_self)
+		return hif->ops->reset_self(priv);
+	return 0;
+}
+
+/*create self_reset work*/
+static void cfg80211_do_reset_work(struct work_struct *work)
+{
+	int ret;
+	struct sprd_priv *priv = container_of(work, struct sprd_priv, reset_work);
+
+	ret = cfg80211_host_reset_self(priv);
+	if (!ret)
+		pr_err("%s host reset self success!\n", __func__);
+}
+
+static int cfg80211_init_reset_work(struct sprd_priv *priv)
+{
+	INIT_WORK(&priv->reset_work, cfg80211_do_reset_work);
+
+	priv->reset_workq = alloc_ordered_workqueue("sprd_reset_work",
+						     WQ_HIGHPRI |
+						     WQ_CPU_INTENSIVE |
+						     WQ_MEM_RECLAIM);
+	if (!priv->reset_workq) {
+		pr_err("%s sprd_reset_work create failed\n", __func__);
+		return -ENOMEM;
+	}
+	return 0;
+}
+
+static void cfg80211_deinit_reset_work(struct sprd_priv *priv)
+{
+	cancel_work_sync(&priv->reset_work);
+	flush_workqueue(priv->reset_workq);
+	destroy_workqueue(priv->common_workq);
+}
+
+void sprd_cancel_reset_work(struct sprd_priv *priv)
+{
+	flush_work(&priv->reset_work);
+}
+#endif
 
 static enum sprd_mode cfg80211_type_to_mode(enum nl80211_iftype type, char *name)
 {
@@ -256,20 +321,20 @@ static int cfg80211_set_beacon_ies(struct sprd_vif *vif,
 	if (!beacon)
 		return -EINVAL;
 
-	if (beacon->beacon_ies_len) {
+	if (beacon->beacon_ies_len && beacon->beacon_ies_len <= 0xFFFF) {
 		netdev_dbg(vif->ndev, "set beacon IE\n");
 		ret = sprd_set_beacon_ie(vif->priv, vif, beacon->beacon_ies,
 					 beacon->beacon_ies_len);
 	}
 
-	if (beacon->proberesp_ies_len) {
+	if (beacon->proberesp_ies_len && beacon->proberesp_ies_len <= 0xFFFF) {
 		netdev_dbg(vif->ndev, "set probe response IE\n");
 		ret = sprd_set_proberesp_ie(vif->priv, vif,
 					    beacon->proberesp_ies,
 					    beacon->proberesp_ies_len);
 	}
 
-	if (beacon->assocresp_ies_len) {
+	if (beacon->assocresp_ies_len && beacon->assocresp_ies_len <= 0xFFFF) {
 		netdev_dbg(vif->ndev, "set associate response IE\n");
 		ret = sprd_set_assocresp_ie(vif->priv, vif,
 					    beacon->assocresp_ies,
@@ -402,6 +467,12 @@ int sprd_cfg80211_add_key(struct wiphy *wiphy, struct net_device *ndev,
 
 	netdev_info(ndev, "%s key_index=%d, pairwise=%d, key_len=%d\n",
 		    __func__, key_index, pairwise, params->key_len);
+
+	if (key_index > SPRD_MAX_KEY_INDEX) {
+		netdev_err(ndev, "%s key index %d out of bounds!\n", __func__,
+			   key_index);
+		return -ENOENT;
+	}
 
 	vif->key_index[pairwise] = key_index;
 	vif->key_len[pairwise][key_index] = params->key_len;
@@ -854,7 +925,12 @@ int sprd_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev,
 
 	/* Set PSK */
 	if (sme->key_len) {
-		if (sme->crypto.cipher_group == WLAN_CIPHER_SUITE_WEP40 ||
+		if (sme->key_len > WLAN_MAX_KEY_LEN) {
+			netdev_err(ndev, "%s invalid key len: %d\n", __func__,
+				   sme->key_len);
+			ret = -EINVAL;
+			goto err;
+		} else if (sme->crypto.cipher_group == WLAN_CIPHER_SUITE_WEP40 ||
 		    sme->crypto.cipher_group == WLAN_CIPHER_SUITE_WEP104 ||
 		    sme->crypto.ciphers_pairwise[0] ==
 		    WLAN_CIPHER_SUITE_WEP40 ||
@@ -870,11 +946,6 @@ int sprd_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev,
 						    NULL, NULL);
 			if (ret)
 				goto err;
-		} else if (sme->key_len > WLAN_MAX_KEY_LEN) {
-			netdev_err(ndev, "%s invalid key len: %d\n", __func__,
-				   sme->key_len);
-			ret = -EINVAL;
-			goto err;
 		} else {
 			netdev_info(ndev, "PSK %s\n", sme->key);
 			con.psk_len = sme->key_len;
@@ -1364,6 +1435,9 @@ int sprd_init_fw(struct sprd_vif *vif)
 
 	return 0;
 }
+#ifdef DRV_RESET_SELF
+EXPORT_SYMBOL(sprd_init_fw);
+#endif
 
 int sprd_uninit_fw(struct sprd_vif *vif)
 {
@@ -1480,6 +1554,9 @@ struct sprd_priv *sprd_core_create(struct sprd_chip_ops *chip_ops)
 	spin_lock_init(&priv->list_lock);
 	INIT_LIST_HEAD(&priv->vif_list);
 	cfg80211_init_work(priv);
+#ifdef DRV_RESET_SELF
+	cfg80211_init_reset_work(priv);
+#endif
 
 	return priv;
 }
@@ -1492,6 +1569,9 @@ void sprd_core_free(struct sprd_priv *priv)
 		return;
 
 	cfg80211_deinit_work(priv);
+#ifdef DRV_RESET_SELF
+	cfg80211_deinit_reset_work(priv);
+#endif
 	sprd_cmd_deinit(priv);
 
 	wiphy = priv->wiphy;

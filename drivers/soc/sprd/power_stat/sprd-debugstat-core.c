@@ -223,10 +223,12 @@ static int stat_read(struct seq_file *m, void *v)
 
 	seq_printf(m, "Subsys information:\n");
 
+    mutex_lock(&info_mutex);
 	list_for_each_entry(pos, &info_node_list, list) {
 		pos->info = pos->get(pos->data);
 		if (!pos->info) {
 			pr_err("%s: Get %s error\n", __func__, pos->name);
+            mutex_unlock(&info_mutex);
 			return -EINVAL;
 		}
 	}
@@ -239,6 +241,7 @@ static int stat_read(struct seq_file *m, void *v)
 		pos->info = NULL;
 	}
 
+    mutex_unlock(&info_mutex);
 	return 0;
 }
 

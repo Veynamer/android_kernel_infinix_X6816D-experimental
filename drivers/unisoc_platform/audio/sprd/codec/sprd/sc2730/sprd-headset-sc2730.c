@@ -54,6 +54,13 @@
 #define SPRD_BUTTON_JACK_MASK (SND_JACK_BTN_0 | SND_JACK_BTN_1 | \
 	SND_JACK_BTN_2 | SND_JACK_BTN_3 | SND_JACK_BTN_4)
 
+#define IMPD_NOT_NORMAL_MAX_VOLT 3950
+#define IMPD_NOT_NORMAL_MAX_VAL_60K 60000
+#define IMPD_LEFT_MIN_VAL 2700
+#define IMPD_LEFT_MAX_VAL 110000
+#define IMPD_LEFT_OVERRANGE_MIN_VOLT 163
+#define IMPD_LEFT_OVERRANGE_MAX_VOLT 1965
+
 #define ADC_READ_REPET 10
 #define ADC_READ_BTN_COUNT 20
 #define ADC_READ_TYPEC_COUNT 20
@@ -86,6 +93,8 @@
 
 #define headset_reg_set_bits(reg, bits) \
 	sci_adi_set(CODEC_REG((reg)), (bits))
+
+//extern void tp_headset_status_switch(int status);
 
 const char * const eic_name[HDST_ALL_EIC + 1] = {
 	[HDST_INSERT_ALL_EIC] = TO_STRING(HDST_INSERT_ALL_EIC),
@@ -220,6 +229,25 @@ struct sprd_headset_auxadc_cal_l {
 static struct sprd_headset_auxadc_cal_l adc_cal_headset = {
 	0, 0, 0, 0, SPRD_HEADSET_AUXADC_CAL_NO,
 };
+
+struct sprd_headset_auximpd_cal_l {
+	u64 D0;
+	u64 D1;
+	u64 D2;
+	u64 R1_cal;
+	u64 k_cal;
+	u64 cal_type;
+};
+
+#define SPRD_HEADSET_AUXIMPD_CAL_NO 0
+#define SPRD_HEADSET_AUXIMPD_CAL_DO 1
+
+static struct sprd_headset_auximpd_cal_l impd_cal_headset = {
+	0, 0, 0, 0, SPRD_HEADSET_AUXIMPD_CAL_NO,
+};
+
+static int sprd_headset_read_efuse(struct platform_device *pdev,
+					const char *cell_name, u32 *data);
 
 static struct sprd_headset *sprd_hdst;
 
@@ -1166,6 +1194,166 @@ loop_waiting:
 	return headset_type;
 }
 
+static void sprd_cali_impd_value(struct platform_device *pdev)
+{
+	u32 sprd_impd_cal0, sprd_impd_cal1, sprd_impd_cal2, data = 0;
+	u64 dif_D1_D0, dif_D2_D0;
+	u64 p, ret;
+
+	pr_info("%s enter\n", __func__);
+	ret = sprd_headset_read_efuse(pdev, "aud_impd_cal0", &data);
+	if (ret)
+		pr_err("%s, error: headset adc calibration fail %d\n", __func__, ret);
+	sprd_impd_cal0 = data & 0x1F;
+
+	ret = sprd_headset_read_efuse(pdev, "aud_impd_cal1", &data);
+	if (ret)
+		pr_err("%s, error: headset adc calibration fail %d\n", __func__, ret);
+	sprd_impd_cal1 = data & 0x7F;
+
+	ret = sprd_headset_read_efuse(pdev, "aud_impd_cal2", &data);
+	if (ret)
+		pr_err("%s, error: headset adc calibration fail %d\n", __func__, ret);
+	sprd_impd_cal2 = data & 0xFFF;
+
+	pr_info("%s: IMPD efuse value D0 = %d, D1 = %d, D2 = %d\n", __func__,
+				sprd_impd_cal0, sprd_impd_cal1, sprd_impd_cal2);
+
+	impd_cal_headset.D0 = sprd_impd_cal0 + 0x1FF1;
+	impd_cal_headset.D1 = sprd_impd_cal1 + 0x201A;
+	impd_cal_headset.D2 = sprd_impd_cal2 + 0x27CA;
+
+	dif_D1_D0 = impd_cal_headset.D1 - impd_cal_headset.D0;
+	dif_D2_D0 = impd_cal_headset.D2 - impd_cal_headset.D0;
+
+	p = 10000000 * dif_D1_D0 / dif_D2_D0;
+
+	impd_cal_headset.R1_cal =
+		(16 * 750 * (10000000 - p)) / (750 * p - 160000000);
+
+	impd_cal_headset.k_cal =
+		10000000 * 16 / (impd_cal_headset.R1_cal + 16) * (1<<13) / dif_D1_D0;
+
+	pr_info("%s: impd_cal_headset.D0: %d ,impd_cal_headset.D1 %d , impd_cal_headset.D2 %d\n",
+		__func__, impd_cal_headset.D0, impd_cal_headset.D1, impd_cal_headset.D2);
+	pr_info("p %d, impd_cal_headset.R1_cal %d , impd_cal_headset.k_cal %d",
+		p, impd_cal_headset.R1_cal, impd_cal_headset.k_cal);
+
+	/* following registers set scale, now set 0 - 93k */
+	headset_reg_set_bits(ANA_IMPD1, IMPD_STEP_I(0x01));
+	headset_reg_set_bits(ANA_IMPD1, IMPD_RREF(0x2));
+	headset_reg_set_bits(ANA_IMPD1, IMPD_R1(0x7));
+}
+
+static u32 sprd_cali_impd_ideal_val(u64 impd_value, struct platform_device *pdev)
+{
+	u64 alpha, R, k, R1, R_ref, I_0;
+	u32 reg_val;
+
+	alpha = impd_cal_headset.k_cal * (impd_value - impd_cal_headset.D0) / (1<<13);
+
+	pr_info("%s: alpha: %d ", __func__, alpha);
+	headset_reg_read(ANA_STS14, &reg_val);
+
+	R1 = (reg_val & 0x70) >> 4;
+	R_ref = (reg_val & 0xC) >> 2;
+	I_0 = reg_val & 0x3;
+
+	k = 128;
+	R = k * impd_cal_headset.R1_cal * alpha / (10000000 - alpha);
+	pr_info("%s: IMPD left value: %d ,ideal value is %d\n", __func__, impd_value, R);
+
+	return R;
+}
+
+static u32 sprd_headset_check_impd_value(struct sprd_headset *hdst)
+{
+	struct platform_device *pdev = hdst->pdev;
+	u32 mask, impd_val_ideal, impd_value = 0;
+
+	/* enable clock for IMPD */
+	headset_reg_set_bits(ANA_DCL1, DCL_EN);
+	mask = ANA_CLK_EN | CLK_DIG_6M5_EN | CLK_DCL_6M5_EN | CLK_DCL_32K_EN;
+	headset_reg_set_bits(ANA_CLK0, mask);
+	headset_reg_set_bits(ANA_DCL1, DIG_CLK_IMPD_EN);
+	headset_reg_set_bits(ANA_CLK0, CLK_IMPD_EN);
+
+	/* enable power supply for IMPD */
+	headset_reg_set_bits(ANA_CDC0, PGA_ADC_IBIAS_EN);
+	headset_reg_set_bits(ANA_PMU0, VB_EN);
+
+	/* config for analog moudle IMPD */
+	headset_reg_set_bits(ANA_DCL0, RSTN_AUD_DIG_IMPD_ADC);
+	headset_reg_set_bits(ANA_IMPD0, IMPD_ADC_EN);
+	headset_reg_clr_bits(ANA_IMPD0, IMPD_ADC_RST);
+	headset_reg_set_bits(ANA_IMPD1, IMPD_ADC_CLK_SEL(0x00));
+	headset_reg_set_bits(ANA_IMPD0, IMPD_BUF_EN);
+	headset_reg_set_bits(ANA_IMPD0, IMPD_BUF_CHOP_EN);
+
+	/* cal impd left 0x0001 */
+	headset_reg_set_bits(ANA_IMPD0, IMPD_CH_SEL(0x0001));
+	headset_reg_set_bits(ANA_IMPD2, IMPD_TIME_CNT_SEL(0x000));
+	headset_reg_set_bits(ANA_IMPD2, IMPD_STEP_T(0x00));
+
+	/* enable ramp step for IMPD */
+	headset_reg_set_bits(ANA_IMPD2, IMPD_CUR_EN);
+	sprd_msleep(20);
+	headset_reg_set_bits(ANA_IMPD2, IMPD_COUNT_AGAIN);
+	sprd_msleep(20);
+
+	/* read ADC output data */
+	headset_reg_read(ANA_STS14, &impd_value);
+
+	/* disable ramp up */
+	headset_reg_clr_bits(ANA_IMPD2, IMPD_CUR_EN);
+
+	/* config for IMPD turn off */
+	headset_reg_set_bits(ANA_IMPD0, IMPD_ADC_RST);
+	headset_reg_clr_bits(ANA_IMPD0, IMPD_ADC_EN);
+	headset_reg_clr_bits(ANA_IMPD0, IMPD_BUF_EN);
+	headset_reg_clr_bits(ANA_IMPD0, IMPD_BUF_CHOP_EN);
+
+	/* calibration impd value (disable) */
+	impd_val_ideal = sprd_cali_impd_ideal_val(impd_value, pdev);
+
+	return impd_val_ideal;
+}
+
+static u32 sprd_headset_get_impd_val(struct sprd_headset *hdst, bool need_delay)
+{
+		u32 impd_left_val;
+
+		/* disable headmicbias power */
+		sprd_headset_power_set(&hdst->power_manager, "HEADMICBIAS", false);
+		/* NOT_NORMAL_HEADSET mic and GND are connected, need delay */
+		if (need_delay)
+			sprd_msleep(20);
+
+		/* disable detect circuit current select signal 1uA */
+		headset_reg_write(ANA_HDT1, HEDET_LDET_I_SEL(0x0), HEDET_LDETL_REF_SEL(0xf));
+
+		headset_reg_clr_bits(ANA_HDT0, HEDET_VREF_EN);
+		headset_reg_write(ANA_HDT1, HEDET_HPR_RSEL(0x0), HEDET_HPR_RSEL(0x3));
+		headset_reg_clr_bits(ANA_HDT1, HEDET_HPR_PULLD_EN);
+		headset_reg_write(ANA_HDT1, HEDET_HPL_RSEL(0x0), HEDET_HPL_RSEL(0x3));
+		headset_reg_clr_bits(ANA_HDT1, HEDET_HPL_PULLD_EN);
+		sprd_msleep(1);
+
+		impd_left_val = sprd_headset_check_impd_value(hdst);
+		pr_info("%s: IMPD left value is %d\n", __func__, impd_left_val);
+
+		headset_reg_set_bits(ANA_HDT0, HEDET_VREF_EN);
+		headset_reg_write(ANA_HDT1, HEDET_HPR_RSEL(0x1), HEDET_HPR_RSEL(0x3));
+		headset_reg_set_bits(ANA_HDT1, HEDET_HPR_PULLD_EN);
+		headset_reg_write(ANA_HDT1, HEDET_HPL_RSEL(0x1), HEDET_HPL_RSEL(0x3));
+		headset_reg_set_bits(ANA_HDT1, HEDET_HPL_PULLD_EN);
+
+		headset_reg_write(ANA_HDT1, HEDET_LDET_I_SEL(0x2), HEDET_LDETL_REF_SEL(0xf));
+		sprd_headset_power_set(&hdst->power_manager, "HEADMICBIAS", true);
+
+		return impd_left_val;
+}
+
 static enum sprd_headset_type sprd_headset_type_plugged(void)
 {
 	struct sprd_headset *hdst = sprd_hdst;
@@ -1173,6 +1361,7 @@ static enum sprd_headset_type sprd_headset_type_plugged(void)
 	struct iio_channel *adc_chan;
 	int adc_mic_average, adc_mic_ideal, adc_left_average,
 		adc_left_ideal, val;
+	u32 impd_left_val;
 	bool adc_value_err = false;
 	enum sprd_headset_type headset_type;
 
@@ -1250,7 +1439,8 @@ static enum sprd_headset_type sprd_headset_type_plugged(void)
 		pr_info("%s when audio_on and 3pole was reported, report 3pole instead\n",
 			__func__);
 		sprd_headset_ldetl_ref_sel(LDETL_REF_SEL_100mV);
-		return HEADSET_NO_MIC;
+		headset_type = HEADSET_NO_MIC;
+		goto type_report;
 	}
 
 	pr_info("%s sprd_half_adc_gnd %d, sprd_adc_gnd %d,sprd_one_half_adc_gnd %d, threshold_3pole %d\n",
@@ -1262,14 +1452,17 @@ static enum sprd_headset_type sprd_headset_type_plugged(void)
 		ABS(adc_mic_ideal - adc_left_ideal) < pdata->sprd_adc_gnd) {
 		sprd_headset_ldetl_ref_sel(LDETL_REF_SEL_100mV);
 		sprd_hmicbias_hw_control_enable(false, pdata);
-		return HEADSET_4POLE_NOT_NORMAL;
+		headset_type = HEADSET_4POLE_NOT_NORMAL;
+		goto type_report;
 	} else if (adc_left_ideal > pdata->sprd_adc_gnd &&
 		ABS(adc_mic_ideal - adc_left_ideal) >= pdata->sprd_adc_gnd) {
-		return HEADSET_TYPE_ERR;
+		headset_type = HEADSET_TYPE_ERR;
+		goto type_report;
 	} else if (adc_left_ideal < pdata->sprd_adc_gnd &&
 		adc_mic_ideal < pdata->threshold_3pole) {
 		sprd_headset_ldetl_ref_sel(LDETL_REF_SEL_100mV);
-		return HEADSET_NO_MIC;
+		headset_type = HEADSET_NO_MIC;
+		goto type_report;
 	} else if (adc_left_ideal < pdata->sprd_adc_gnd &&
 		adc_mic_ideal >= pdata->threshold_3pole) {
 		sprd_hmicbias_hw_control_enable(true, pdata);
@@ -1277,12 +1470,14 @@ static enum sprd_headset_type sprd_headset_type_plugged(void)
 		pr_debug("%s val %d\n", __func__, val);
 		if (val != 0 && adc_left_ideal < pdata->sprd_half_adc_gnd) {
 			sprd_headset_ldetl_ref_sel(LDETL_REF_SEL_100mV);
-			return HEADSET_4POLE_NORMAL;
+			headset_type = HEADSET_4POLE_NORMAL;
+			goto type_report;
 		} else if (val != 0 &&
 			adc_left_ideal >= pdata->sprd_half_adc_gnd) {
 			/* selfie stick */
 			sprd_headset_ldetl_ref_sel(LDETL_REF_SEL_100mV);
-			return HEADSET_4POLE_NORMAL;
+			headset_type = HEADSET_4POLE_NORMAL;
+			goto type_report;
 		} else if (val == 0 &&
 			adc_left_ideal < pdata->sprd_half_adc_gnd) {
 			/*
@@ -1294,7 +1489,7 @@ static enum sprd_headset_type sprd_headset_type_plugged(void)
 				sprd_headset_ldetl_ref_sel(LDETL_REF_SEL_20mV);
 			else
 				sprd_headset_ldetl_ref_sel(LDETL_REF_SEL_100mV);
-			return headset_type;
+			goto type_report;
 		} else if (val == 0 &&
 			adc_left_ideal >= pdata->sprd_half_adc_gnd &&
 			!pdata->support_line_out) {
@@ -1305,7 +1500,7 @@ static enum sprd_headset_type sprd_headset_type_plugged(void)
 			 */
 			headset_type = sprd_detect_type_through_mdet(hdst);
 			sprd_headset_ldetl_ref_sel(LDETL_REF_SEL_100mV);
-			return headset_type;
+			goto type_report;
 		} else if (val == 0 &&
 			adc_left_ideal >= pdata->sprd_half_adc_gnd &&
 			pdata->support_line_out) {
@@ -1316,11 +1511,34 @@ static enum sprd_headset_type sprd_headset_type_plugged(void)
 				sprd_headset_ldetl_ref_sel(LDETL_REF_SEL_20mV);
 			else
 				sprd_headset_ldetl_ref_sel(LDETL_REF_SEL_100mV);
-			return headset_type;
+			goto type_report;
 		}
 	}
 
 	return HEADSET_TYPE_ERR;
+
+type_report:
+	if (pdata->impd_en && headset_type != HEADSET_TYPE_ERR) {
+		if (headset_type == HEADSET_4POLE_NOT_NORMAL) {
+			impd_left_val = sprd_headset_get_impd_val(hdst, true);
+			if (max(adc_left_ideal, adc_mic_ideal) > IMPD_NOT_NORMAL_MAX_VOLT ||
+				impd_left_val > IMPD_NOT_NORMAL_MAX_VAL_60K) {
+				headset_type = HEADSET_TYPE_ERR;
+				pr_info("The plugin device is not a headset, maybe water");
+			}
+		} else {
+			impd_left_val = sprd_headset_get_impd_val(hdst, false);
+			if ((impd_left_val > IMPD_LEFT_MIN_VAL &&
+			impd_left_val < IMPD_LEFT_MAX_VAL) ||
+			(impd_left_val == IMPD_LEFT_MAX_VAL &&
+			adc_left_ideal > IMPD_LEFT_OVERRANGE_MIN_VOLT &&
+			adc_left_ideal < IMPD_LEFT_OVERRANGE_MAX_VOLT)) {
+				headset_type = HEADSET_TYPE_ERR;
+				pr_info("The plugin device is not a headset, maybe water");
+			}
+		}
+	}
+	return headset_type;
 }
 
 static void
@@ -1997,6 +2215,7 @@ static void sprd_headset_type_report(struct sprd_headset *hdst)
 	case HEADSET_4POLE_NORMAL:
 		hdst->headphone = HEADSET_4POLE_NORMAL;
 		sprd_process_4pole_type(hdst, headset_type);
+		//tp_headset_status_switch(1);
 		pr_info("type_report headset plug in\n");
 		break;
 	default:
@@ -2040,6 +2259,7 @@ static void sprd_headset_insert_all_plugout(struct sprd_headset *hdst)
 		pr_info("headphone plug out\n");
 		break;
 	case HEADSET_4POLE_NORMAL:
+		//tp_headset_status_switch(0);
 		pr_info("headset plug out\n");
 		break;
 	default:
@@ -2836,7 +3056,7 @@ int sprd_headset_soc_probe(struct snd_soc_component *codec)
 		 pdata->gpios[HDST_GPIO_AUD_DET_INT_ALL]);
 	gpio_desc_test = gpio_to_desc(pdata->gpios[HDST_GPIO_AUD_DET_INT_ALL]);
 	/* used to test, we can operate this gpio with command */
-	gpiod_export(gpio_desc_test, true);
+	//gpiod_export(gpio_desc_test, true);
 
 	sema_init(&hdst->sem, 1);
 
@@ -2906,6 +3126,8 @@ int sprd_headset_soc_probe(struct snd_soc_component *codec)
 	init_completion(&hdst->wait_ldetl);
 
 	sprd_headset_debug_sysfs_init();
+	if (pdata->impd_en)
+		sprd_cali_impd_value(hdst->pdev);
 	sprd_get_adc_cal_from_efuse(hdst->pdev);
 	ret = devm_request_threaded_irq(
 		dev, hdst->irq_detect_int_all, NULL,
@@ -3011,6 +3233,16 @@ static int sprd_headset_parse_dt(struct sprd_headset *hdst)
 	}
 	pdata->jack_type = val ? JACK_TYPE_NC : JACK_TYPE_NO;
 	pr_debug("%s jack_type %d\n", __func__, pdata->jack_type);
+
+	/* Parse configs for support impd detect. */
+	ret = of_property_read_u32(np, "sprd,impd-en", &val);
+	if (ret < 0) {
+		pdata->impd_en = 0;
+		pr_err("%s: parse 'impd-en'' failed!\n", __func__);
+	} else {
+		pdata->impd_en = val;
+		pr_debug("%s impd_en %d\n", __func__, pdata->impd_en);
+	}
 
 	/* Parse for the gpio of EU/US jack type switch. */
 	index = of_property_match_string(np, "gpio-names", "switch");
@@ -3341,6 +3573,7 @@ static int sprd_headset_read_efuse(struct platform_device *pdev,
 static int sprd_get_adc_cal_from_efuse(struct platform_device *pdev)
 {
 	u8 delta[4];
+        s8 calib_delta3;
 	u32 test[2], ret, data = 0;
 	unsigned int adie_chip_id;
 
@@ -3365,12 +3598,19 @@ static int sprd_get_adc_cal_from_efuse(struct platform_device *pdev)
 	delta[2] = test[1] & 0xFF;
 	delta[3] = (test[1] & 0xFF00) >> 8;
 
+	if ((delta[3] & 0x80) != 0) {
+		calib_delta3 = -(delta[3] & 0x7F);
+		pr_info("%s delta3[0x%x] is a minor value!\n", __func__, calib_delta3);
+	} else {
+		calib_delta3 = delta[3];
+	}
+
 	pr_info("%s test[0] 0x%x %d, test[1] 0x%x %d\n",
 		__func__, test[0], test[0], test[1], test[1]);
 
 	pr_info("%s d[0] %#x %d d[1] %#x %d d[2] %#x %d d[3] %#x %d\n",
 			__func__, delta[0], delta[0], delta[1], delta[1],
-			delta[2], delta[2],  delta[3], delta[3]);
+			delta[2], delta[2],  delta[3], calib_delta3);
 
 	adc_cal_headset.cal_type = SPRD_HEADSET_AUXADC_CAL_DO;
 	adie_chip_id  = sci_get_ana_chip_id();
@@ -3380,12 +3620,12 @@ static int sprd_get_adc_cal_from_efuse(struct platform_device *pdev)
 		adc_cal_headset.A = (delta[0] - 128) * 4 + 336;
 		adc_cal_headset.B =  (delta[1] - 128) * 4 + 3357;
 		adc_cal_headset.E1 = delta[2] * 2 + 2400;
-		adc_cal_headset.E2 = delta[3] * 4 + 1500;
+		adc_cal_headset.E2 = calib_delta3 * 4 + 1500;
 	} else {
 		adc_cal_headset.A = (delta[0] - 128) * 4 + 336;
 		adc_cal_headset.B =  (delta[1] - 128) * 4 + 3357;
 		adc_cal_headset.E1 = delta[2] * 2 + 2500;
-		adc_cal_headset.E2 = delta[3] * 4 + 1300;
+		adc_cal_headset.E2 = calib_delta3 * 4 + 1300;
 	}
 	pr_info("%s A %d, B %d E1 %d E2 %d\n",
 		__func__, adc_cal_headset.A, adc_cal_headset.B,

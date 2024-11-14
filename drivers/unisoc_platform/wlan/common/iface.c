@@ -114,6 +114,7 @@ static void iface_str2mac(const char *mac_addr, u8 *mac)
 	mac[5] = m[5];
 }
 
+#ifndef DRV_RESET_SELF
 static int iface_host_reset(struct notifier_block *nb,
 			    unsigned long data, void *ptr)
 {
@@ -141,6 +142,31 @@ static int iface_host_reset(struct notifier_block *nb,
 
 	return NOTIFY_OK;
 }
+#else
+static int iface_host_reset(struct notifier_block *nb,
+			    unsigned long data, void *ptr)
+{
+	struct sprd_priv *priv = iface_get_priv();
+	struct sprd_hif *hif;
+	struct sprd_cmd *cmd = &priv->cmd;
+
+	if (!priv) {
+		pr_err("%s sprd_prv is NULL\n", __func__);
+		return NOTIFY_OK;
+	}
+
+	hif = &priv->hif;
+	hif->cp_asserted = 1;
+	complete(&cmd->completed);
+	sprd_chip_force_exit((void *)&priv->chip);
+
+	pr_info("%s process wifi driver self reset work\n", __func__);
+	if (!work_pending(&priv->reset_work))
+		queue_work(priv->reset_workq, &priv->reset_work);
+
+	return NOTIFY_OK;
+}
+#endif
 
 static struct notifier_block iface_host_reset_cb = {
 	.notifier_call = iface_host_reset,
@@ -340,6 +366,9 @@ int sprd_iface_set_power(struct sprd_hif *hif, int val)
 		sprd_hif_power_off(hif);
 	return ret;
 }
+#ifdef DRV_RESET_SELF
+EXPORT_SYMBOL(sprd_iface_set_power);
+#endif
 
 static int iface_open(struct net_device *ndev)
 {
@@ -604,6 +633,7 @@ static int iface_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 	u8 feat = 0, status = 0;
 	u8 addr[ETH_ALEN] = { 0 }, *mac_addr = NULL, *tmp, *mac_list;
 	int ret = 0, skip, counter, index;
+	#define MAC_ADDR_STR_LEN strlen("00:11:22:33:44:55")
 
 	if (!ifr->ifr_data)
 		return -EINVAL;
@@ -611,7 +641,7 @@ static int iface_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 		return -EFAULT;
 
 	/* add length check to avoid invalid NULL ptr */
-	if (!priv_cmd.total_len) {
+	if (priv_cmd.total_len <= 0) {
 		netdev_info(ndev, "%s: priv cmd total len is invalid\n",
 			    __func__);
 		return -EINVAL;
@@ -628,6 +658,8 @@ static int iface_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 	if (!strncasecmp(command, CMD_BLACKLIST_ENABLE,
 			 strlen(CMD_BLACKLIST_ENABLE))) {
 		skip = strlen(CMD_BLACKLIST_ENABLE) + 1;
+		if (priv_cmd.total_len < skip + MAC_ADDR_STR_LEN)
+			goto out;
 		iface_str2mac(command + skip, addr);
 		if (!is_valid_ether_addr(addr))
 			goto out;
@@ -661,6 +693,11 @@ static int iface_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 				strlen(CMD_ENABLE_WHITELIST))) {
 		skip = strlen(CMD_ENABLE_WHITELIST) + 1;
 		counter = command[skip];
+		if (counter < 0 || counter > 10) {
+			netdev_err(ndev, "%s: enable whitelist counter is invalid: %d\n",
+				   __func__, counter);
+			goto out;
+		}
 		netdev_info(ndev, "%s: enable whitelist counter : %d\n",
 			    __func__, counter);
 		if (!counter) {
@@ -668,6 +705,8 @@ static int iface_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 						 SUBCMD_ENABLE, 0, NULL);
 			goto out;
 		}
+		if (priv_cmd.total_len < skip + counter * (MAC_ADDR_STR_LEN + 1))
+			goto out;
 		mac_addr = kmalloc(ETH_ALEN * counter, GFP_KERNEL);
 		if (!mac_addr) {
 			ret = -ENOMEM;
@@ -694,6 +733,11 @@ static int iface_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 				strlen(CMD_DISABLE_WHITELIST))) {
 		skip = strlen(CMD_DISABLE_WHITELIST) + 1;
 		counter = command[skip];
+		if (counter < 0 || counter > 10) {
+			netdev_err(ndev, "%s: disable whitelist counter is invalid: %d\n",
+				   __func__, counter);
+			goto out;
+		}
 		netdev_info(ndev, "%s: disable whitelist counter : %d\n",
 			    __func__, counter);
 		if (!counter) {
@@ -701,6 +745,8 @@ static int iface_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 						 SUBCMD_DISABLE, 0, NULL);
 			goto out;
 		}
+		if (priv_cmd.total_len < skip + counter * (MAC_ADDR_STR_LEN + 1))
+			goto out;
 		mac_addr = kmalloc(ETH_ALEN * counter, GFP_KERNEL);
 		if (!mac_addr) {
 			ret = -ENOMEM;
@@ -805,7 +851,7 @@ static int iface_set_power_save(struct net_device *ndev, struct ifreq *ifr)
 		return -EFAULT;
 
 	/* add length check to avoid invalid NULL ptr */
-	if (!priv_cmd.total_len) {
+	if (priv_cmd.total_len <= 0) {
 		netdev_err(ndev, "%s: priv cmd total len is invalid\n",
 			   __func__);
 		return -EINVAL;
@@ -822,6 +868,8 @@ static int iface_set_power_save(struct net_device *ndev, struct ifreq *ifr)
 	if (!strncasecmp(command, CMD_SETSUSPENDMODE,
 			 strlen(CMD_SETSUSPENDMODE))) {
 		skip = strlen(CMD_SETSUSPENDMODE) + 1;
+		if (priv_cmd.total_len <= skip)
+			goto out;
 		ret = kstrtoint(command + skip, 0, &value);
 		if (ret)
 			goto out;
@@ -875,6 +923,7 @@ static int iface_set_p2p_mac(struct net_device *ndev, struct ifreq *ifr)
 	int ret = 0;
 	struct sprd_vif *tmp1, *tmp2;
 	u8 addr[ETH_ALEN] = { 0 };
+	#define P2P_MAC_SKIP_LEN 11
 
 	if (!ifr->ifr_data)
 		return -EINVAL;
@@ -882,7 +931,7 @@ static int iface_set_p2p_mac(struct net_device *ndev, struct ifreq *ifr)
 		return -EFAULT;
 
 	/* add length check to avoid invalid NULL ptr */
-	if (!priv_cmd.total_len) {
+	if (priv_cmd.total_len < P2P_MAC_SKIP_LEN + ETH_ALEN) {
 		netdev_err(ndev, "%s: priv cmd total len is invalid\n",
 			   __func__);
 		return -EINVAL;
@@ -896,7 +945,7 @@ static int iface_set_p2p_mac(struct net_device *ndev, struct ifreq *ifr)
 		goto out;
 	}
 
-	memcpy(addr, command + 11, ETH_ALEN);
+	memcpy(addr, command + P2P_MAC_SKIP_LEN, ETH_ALEN);
 	netdev_info(ndev, "p2p dev random addr is %pM\n", addr);
 	if (is_multicast_ether_addr(addr)) {
 		netdev_err(ndev, "%s invalid addr\n", __func__);
@@ -941,6 +990,7 @@ out:
 static int iface_set_ndev_mac(struct net_device *ndev, struct ifreq *ifr)
 {
 	struct sprd_vif *vif = netdev_priv(ndev);
+	struct sprd_hif *hif = &vif->priv->hif;
 	struct android_wifi_priv_cmd priv_cmd;
 	char *command = NULL;
 	int ret = 0;
@@ -952,7 +1002,7 @@ static int iface_set_ndev_mac(struct net_device *ndev, struct ifreq *ifr)
 		return -EFAULT;
 
 	/* add length check to avoid invalid NULL ptr */
-	if (!priv_cmd.total_len) {
+	if (priv_cmd.total_len < ETH_ALEN) {
 		netdev_info(ndev, "%s: priv cmd total len is invalid\n",
 			    __func__);
 		return -EINVAL;
@@ -981,6 +1031,21 @@ static int iface_set_ndev_mac(struct net_device *ndev, struct ifreq *ifr)
 	ether_addr_copy(vif->priv->default_mac, addr);
 	ether_addr_copy(vif->mac, addr);
 
+	/* iface_register_netdev has generated an invalid address, and sent to
+	 * cp2 by CMD_OPEN command, so it is necessary to update a correct
+	 * netdevice address to cp2
+	 */
+	if (atomic_read(&hif->power_cnt) != 0) {
+		netdev_info(ndev, "set nedv mac to cp2: %pM\n", addr);
+		ret = sprd_set_random_mac(vif->priv, vif,
+					  SPRD_CONNECT_RANDOM_ADDR,
+					  addr);
+		if (ret) {
+			netdev_err(ndev, "%s set ndev mac error\n", __func__);
+			ret = -EFAULT;
+			goto out;
+		}
+	}
 out:
 	kfree(command);
 	return ret;
@@ -1435,6 +1500,9 @@ static int iface_core_deinit(struct sprd_priv *priv)
 	sprd_debug_deinit(&priv->debug);
 	sprd_qos_enable(priv, 0);
 	sprd_deinit_npi();
+#ifdef DRV_RESET_SELF
+	sprd_cancel_reset_work(priv);
+#endif
 	iface_del_all_ifaces(priv);
 	sprd_vendor_deinit(priv, priv->wiphy);
 	wiphy_unregister(priv->wiphy);
