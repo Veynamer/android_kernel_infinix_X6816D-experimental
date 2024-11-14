@@ -37,6 +37,14 @@ enum TIMING {
 };
 
 struct pll_regs {
+    union __reg_02__ {
+        struct __02 {
+            u8 testpll: 2;
+            u8 trimbg: 4;
+            u8 lp_sel: 2;
+        } bits;
+        u8 val;
+    } _02;
 	union __reg_03__ {
 		struct __03 {
 			u8 prbs_bist: 1;
@@ -265,6 +273,9 @@ static int dphy_set_pll_reg(struct regmap *regmap, struct dphy_pll *pll)
 	if (!pll || !pll->fvco)
 		goto FAIL;
 
+	regs._02.bits.lp_sel = 0x3;
+	regs._02.bits.trimbg = 1 << 3;
+	regs._02.bits.testpll = 0;
 	regs._03.bits.prbs_bist = 1;
 	regs._03.bits.en_lp_treot = true;
 	regs._03.bits.lpf_sel = pll->lpf_sel;
@@ -295,6 +306,7 @@ static int dphy_set_pll_reg(struct regmap *regmap, struct dphy_pll *pll)
 	regs._0f.bits.det_delay = pll->det_delay;
 	regs._0f.bits.kdelta =  pll->kdelta >> 12;
 
+	regmap_write(regmap, 0x02, regs._02.val);
 	regmap_write(regmap, 0x03, regs._03.val);
 	regmap_write(regmap, 0x04, regs._04.val);
 	regmap_write(regmap, 0x07, regs._07.val);
@@ -339,7 +351,7 @@ FAIL:
 	return -1;
 }
 
-static int dphy_set_timing_regs(struct regmap *regmap, int type, u8 val[])
+static int dphy_set_timing_regs(struct dphy_context *ctx, struct regmap *regmap, int type, u8 val[])
 {
 	switch (type) {
 	case REQUEST_TIME:
@@ -415,6 +427,11 @@ static int dphy_set_timing_regs(struct regmap *regmap, int type, u8 val[])
 	/* the following just use default value */
 	case SETTLE_TIME:
 	case TA_GET:
+		if (ctx->dphy_ta_get_val) {
+			regmap_write(regmap, 0x21, val[CLK]);
+			pr_info("liang : modify the TA_GET : %d\n",val[CLK]);
+			break;
+		}
 	case TA_GO:
 	case TA_SURE:
 		break;
@@ -449,7 +466,7 @@ static int dphy_timing_config(struct dphy_context *ctx)
 	range[H] = INFINITY;
 	val[CLK] = DIV_ROUND_UP(range[L] * (factor << 1), t_byteck) - 2;
 	val[DATA] = val[CLK];
-	dphy_set_timing_regs(regmap, REQUEST_TIME, val);
+	dphy_set_timing_regs(ctx,regmap, REQUEST_TIME, val);
 
 	/* PREPARE_TIME: HS sequence: LP-00 */
 	range[L] = 38 * scale;
@@ -462,7 +479,7 @@ static int dphy_timing_config(struct dphy_context *ctx)
 	tmp |= AVERAGE(range[L], range[H]) << 16;
 	val[DATA] = DIV_ROUND_UP(AVERAGE(range[L], range[H]),
 			t_half_byteck) - 1;
-	dphy_set_timing_regs(regmap, PREPARE_TIME, val);
+	dphy_set_timing_regs(ctx,regmap, PREPARE_TIME, val);
 
 	/* ZERO_TIME: HS-ZERO */
 	range[L] = 300 * scale;
@@ -473,7 +490,7 @@ static int dphy_timing_config(struct dphy_context *ctx)
 	val[DATA] = DIV_ROUND_UP(range[L] * factor
 			+ ((tmp >> 16) & 0xffff) - 525 * t_byteck / 100,
 			t_byteck) - 2;
-	dphy_set_timing_regs(regmap, ZERO_TIME, val);
+	dphy_set_timing_regs(ctx,regmap, ZERO_TIME, val);
 
 	/* TRAIL_TIME: HS-TRAIL */
 	range[L] = 60 * scale;
@@ -481,21 +498,21 @@ static int dphy_timing_config(struct dphy_context *ctx)
 	val[CLK] = DIV_ROUND_UP(range[L] * factor - constant, t_half_byteck);
 	range[L] = max(8 * t_ui, 60 * scale + 4 * t_ui);
 	val[DATA] = DIV_ROUND_UP(range[L] * 3 / 2 - constant, t_half_byteck) - 2;
-	dphy_set_timing_regs(regmap, TRAIL_TIME, val);
+	dphy_set_timing_regs(ctx,regmap, TRAIL_TIME, val);
 
 	/* EXIT_TIME: */
 	range[L] = 100 * scale;
 	range[H] = INFINITY;
 	val[CLK] = DIV_ROUND_UP(range[L] * factor, t_byteck) - 2;
 	val[DATA] = val[CLK];
-	dphy_set_timing_regs(regmap, EXIT_TIME, val);
+	dphy_set_timing_regs(ctx,regmap, EXIT_TIME, val);
 
 	/* CLKPOST_TIME: */
 	range[L] = 60 * scale + 52 * t_ui;
 	range[H] = INFINITY;
 	val[CLK] = DIV_ROUND_UP(range[L] * factor, t_byteck) - 2;
 	val[DATA] = val[CLK];
-	dphy_set_timing_regs(regmap, CLKPOST_TIME, val);
+	dphy_set_timing_regs(ctx,regmap, CLKPOST_TIME, val);
 
 	/* SETTLE_TIME:
 	* This time is used for receiver. So for transmitter,
@@ -516,6 +533,13 @@ static int dphy_timing_config(struct dphy_context *ctx)
 	* receiver drives Bridge state(LP-00) before releasing control
 	* reg 0x21 default value: 0x03, which is good.
 	*/
+	if (ctx->dphy_ta_get_val) {
+		range[L] = INFINITY;
+		range[H] = INFINITY;
+		val[CLK] = 0x6;
+		val[DATA] = val[CLK];
+		dphy_set_timing_regs(ctx, regmap, TA_GET, val);
+	}
 
 	return 0;
 }

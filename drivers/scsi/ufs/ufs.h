@@ -341,6 +341,15 @@ enum {
 	WB_BUF_MODE_SHARED		= 0x1,
 };
 
+enum ufs_ffu_status {
+	UFS_FFU_STATUS_NO_INFORMATION   = 0x0,
+	UFS_FFU_STATUS_SUCCESSFUL_UPDATE = 0x1,
+	UFS_FFU_STATUS_CORRUPTION_ERR   = 0x2,
+	UFS_FFU_STATUS_INTERNAL_ERROR   = 0x3,
+	UFS_FFU_STATUS_VERSION_MISMATCH = 0x4,
+	UFS_FFU_STATUS_GENERAL_ERROR    = 0xFF,
+};
+
 /*
  * Logical Unit Write Protect
  * 00h: LU not write protected

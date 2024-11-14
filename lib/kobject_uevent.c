@@ -657,7 +657,7 @@ int add_uevent_var(struct kobj_uevent_env *env, const char *format, ...)
 	int len;
 
 	if (env->envp_idx >= ARRAY_SIZE(env->envp)) {
-		WARN(1, KERN_ERR "add_uevent_var: too many keys\n");
+		WARN(1, KERN_DEBUG "add_uevent_var: too many keys\n");
 		return -ENOMEM;
 	}
 
@@ -668,7 +668,7 @@ int add_uevent_var(struct kobj_uevent_env *env, const char *format, ...)
 	va_end(args);
 
 	if (len >= (sizeof(env->buf) - env->buflen)) {
-		WARN(1, KERN_ERR "add_uevent_var: buffer size too small\n");
+		WARN(1, KERN_DEBUG "add_uevent_var: buffer size too small\n");
 		return -ENOMEM;
 	}
 

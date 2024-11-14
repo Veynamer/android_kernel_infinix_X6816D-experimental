@@ -2,12 +2,15 @@
 /*
  * Copyright (C) 2020 Unisoc Inc.
  */
-
+ 
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_atomic_helper.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of_irq.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/sysfs.h>
 #include <linux/timer.h>
@@ -16,10 +19,13 @@
 
 #include "disp_lib.h"
 #include "sprd_dpu.h"
+#include "sprd_drm.h"
 #include "sprd_dsi_panel.h"
 #include "sprd_dsi.h"
 #include "sysfs_display.h"
 
+#define DRM_DPMS_SUSPEND 0
+#define DRM_DPMS_RESUME  1
 static uint32_t max_reg_length;
 
 static inline struct sprd_panel *to_sprd_panel(struct drm_panel *panel)
@@ -32,6 +38,30 @@ struct dpu_sysfs {
 };
 
 static struct dpu_sysfs *sysfs;
+
+static ssize_t cali_dpu_stop_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct sprd_dpu *dpu = dev_get_drvdata(dev);
+
+	cali_sprd_dpu_stop(dpu);
+
+	return count;
+}
+static DEVICE_ATTR_WO(cali_dpu_stop);
+
+static ssize_t dpms_state_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct sprd_dpu *dpu = dev_get_drvdata(dev);
+
+	cali_dpu_glb_disable(&dpu->ctx);
+	cali_dpu_clk_disable(&dpu->ctx);
+	return count;
+}
+static DEVICE_ATTR_WO(dpms_state);
 
 static ssize_t run_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -95,6 +125,47 @@ static ssize_t refresh_store(struct device *dev,
 	return count;
 }
 static DEVICE_ATTR_WO(refresh);
+
+static ssize_t modeset_test_store(struct device *dev,
+			struct device_attribute *attr,
+			const char *buf, size_t count)
+{
+	struct sprd_dpu *dpu = dev_get_drvdata(dev);
+	struct dpu_context *ctx = &dpu->ctx;
+	struct sprd_panel *panel = to_sprd_panel(dpu->dsi->panel);
+	struct drm_encoder *encoder = panel->base.connector->encoder;
+	int index, ret;
+
+	down(&ctx->lock);
+
+	pr_info("[drm] %s()\n", __func__);
+
+	if (!ctx->enabled || ctx->stopped) {
+		pr_err("dpu is not initialized or stopped!\n");
+		up(&ctx->lock);
+		return -EINVAL;
+	}
+	if (!encoder->crtc || (encoder->crtc->state &&
+	    !encoder->crtc->state->active)) {
+		pr_err("encoder is not active\n");
+		up(&ctx->lock);
+		return -EINVAL;
+	}
+
+	ret = kstrtoint(buf, 10, &index);
+	if (ret || (index >= panel->info.num_buildin_modes)) {
+		pr_err("Invalid input index\n");
+		up(&ctx->lock);
+		return -EINVAL;
+	}
+
+	dpu->core->modeset(ctx, &panel->info.buildin_modes[index]);
+
+	up(&ctx->lock);
+
+	return count;
+}
+static DEVICE_ATTR_WO(modeset_test);
 
 static ssize_t bg_color_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -528,7 +599,6 @@ static ssize_t wr_regs_store(struct device *dev,
 	}
 
 	kfree(value);
-	up(&dpu->ctx.lock);
 
 	return count;
 }
@@ -644,6 +714,7 @@ static DEVICE_ATTR_RO(frame_count);
 static struct attribute *dpu_attrs[] = {
 	&dev_attr_run.attr,
 	&dev_attr_refresh.attr,
+	&dev_attr_modeset_test.attr,
 	&dev_attr_bg_color.attr,
 	&dev_attr_disable_flip.attr,
 	&dev_attr_actual_fps.attr,
@@ -653,6 +724,8 @@ static struct attribute *dpu_attrs[] = {
 	&dev_attr_irq_register.attr,
 	&dev_attr_irq_unregister.attr,
 	&dev_attr_frame_count.attr,
+	&dev_attr_dpms_state.attr,
+	&dev_attr_cali_dpu_stop.attr,
 	NULL,
 };
 static const struct attribute_group dpu_group = {

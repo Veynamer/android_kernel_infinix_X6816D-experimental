@@ -12,7 +12,6 @@
 #include <linux/notifier.h>
 #include <linux/of.h>
 #include <linux/slab.h>
-#include <linux/gpio.h>//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger 2022-10-14
 
 #define SC2721_BATTERY_NAME			"sc27xx-fgu"
 
@@ -690,10 +689,7 @@ static int sc2721_charger_probe(struct platform_device *pdev)
 	struct sc2721_charger_info *info;
 	struct power_supply_config charger_cfg = { };
 	int ret;
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger begin  2022-10-14
-	if(gpio_get_value(255)) //QinJinke
-		return -ENODEV;
-	//Add by qinjinke@sagereal.com for NVA-1589 Nova plus charger end  2022-10-14
+
 	info = devm_kzalloc(&pdev->dev, sizeof(*info), GFP_KERNEL);
 	if (!info)
 		return -ENOMEM;

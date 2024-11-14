@@ -1069,6 +1069,8 @@ int ufshcd_query_attr_retry(struct ufs_hba *hba,
 	u32 *attr_val);
 int ufshcd_query_flag(struct ufs_hba *hba, enum query_opcode opcode,
 	enum flag_idn idn, u8 index, bool *flag_res);
+int ufshcd_query_attr(struct ufs_hba *hba, enum query_opcode opcode,
+	enum attr_idn idn, u8 index, u8 selector, u32 *attr_val);
 int ufshcd_query_flag_retry(struct ufs_hba *hba,
 	enum query_opcode opcode, enum flag_idn idn, u8 index, bool *flag_res);
 int ufshcd_bkops_ctrl(struct ufs_hba *hba, enum bkops_status status);
@@ -1088,6 +1090,7 @@ int ufshcd_map_desc_id_to_length(struct ufs_hba *hba, enum desc_idn desc_id,
 	int *desc_length);
 
 u32 ufshcd_get_local_unipro_ver(struct ufs_hba *hba);
+int ufshcd_link_recovery(struct ufs_hba *hba);
 
 int ufshcd_send_uic_cmd(struct ufs_hba *hba, struct uic_command *uic_cmd);
 
@@ -1259,6 +1262,22 @@ static inline void ufshcd_vops_config_scaling_param(struct ufs_hba *hba,
 		hba->vops->config_scaling_param(hba, profile, data);
 }
 
+static inline void ufshcd_vops_linkup_start_tstamp(struct ufs_hba *hba,
+						   struct uic_command *ucmmd)
+{
+	typedef void (*func)(struct ufs_hba *, struct uic_command *);
+	if (hba->vops && hba->vops->android_kabi_reserved1)
+		((func)(hba->vops->android_kabi_reserved1))(hba, ucmmd);
+}
+
+static inline void ufshcd_vops_dco_calibration(struct ufs_hba *hba,
+					       struct uic_command *ucmmd)
+{
+	typedef void (*func)(struct ufs_hba *, struct uic_command *);
+	if (hba->vops && hba->vops->android_kabi_reserved2)
+		((func)(hba->vops->android_kabi_reserved2))(hba, ucmmd);
+}
+
 extern struct ufs_pm_lvl_states ufs_pm_lvl_states[];
 
 /*
@@ -1280,4 +1299,12 @@ int ufshcd_dump_regs(struct ufs_hba *hba, size_t offset, size_t len,
 		     const char *prefix);
 int ufshcd_uic_hibern8_enter(struct ufs_hba *hba);
 int ufshcd_uic_hibern8_exit(struct ufs_hba *hba);
+
+void sprd_ufs_device_quiesce(struct ufs_hba *hba);
+void sprd_ufs_device_resume(struct ufs_hba *hba);
+
+#define WB_MODE_MASK (0x1F)
+#define DOWNLOAD_MODE (0xE)
+#define VENDOR_SPECIFIC_MODE (0x1)
+
 #endif /* End of Header */

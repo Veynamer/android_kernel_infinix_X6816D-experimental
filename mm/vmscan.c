@@ -64,6 +64,7 @@
 #include <linux/balloon_compaction.h>
 
 #include "internal.h"
+#include <trace/hooks/vh_vmscan.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmscan.h>
@@ -180,7 +181,7 @@ struct scan_control {
 #endif
 
 /*
- * From 0 .. 100.  Higher means more swappy.
+ * From 0 .. 200.  Higher means more swappy.
  */
 int vm_swappiness = 60;
 
@@ -1078,6 +1079,10 @@ static enum page_references page_check_references(struct page *page,
 	 */
 	if (vm_flags & VM_LOCKED)
 		return PAGEREF_RECLAIM;
+
+	/* rmap lock contention: rotate */
+	if (referenced_ptes == -1)
+		return PAGEREF_KEEP;
 
 	if (referenced_ptes) {
 		if (PageSwapBacked(page))
@@ -2196,6 +2201,7 @@ static void shrink_active_list(unsigned long nr_to_scan,
 			}
 		}
 
+		/* Referenced or rmap lock contention: rotate */
 		if (page_referenced(page, 0, sc->target_mem_cgroup,
 				    &vm_flags)) {
 #ifndef CONFIG_LRU_BALANCE_BASE_THRASHING
@@ -2680,6 +2686,9 @@ out:
 		if (!scan && !mem_cgroup_online(memcg))
 			scan = min(lruvec_size, SWAP_CLUSTER_MAX);
 
+#ifdef CONFIG_HYBRIDSWAP
+		trace_android_vh_tune_scan_type((char *)(&scan_balance));
+#endif
 		switch (scan_balance) {
 		case SCAN_EQUAL:
 			/* Scan lists relative to size */
@@ -3560,6 +3569,7 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 
 	return nr_reclaimed;
 }
+EXPORT_SYMBOL(try_to_free_mem_cgroup_pages);
 #endif
 
 static void age_active_anon(struct pglist_data *pgdat,

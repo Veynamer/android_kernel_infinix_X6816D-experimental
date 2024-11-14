@@ -25,6 +25,18 @@ struct dsi_sysfs {
 
 static struct dsi_sysfs *sysfs;
 
+static ssize_t cali_dsi_suspend_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct sprd_dsi *dsi = dev_get_drvdata(dev);
+
+	cali_dsi_glb_disable(&dsi->ctx);
+
+	return count;
+}
+static DEVICE_ATTR_WO(cali_dsi_suspend);
+
 static ssize_t phy_freq_store(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t count)
@@ -146,7 +158,7 @@ static ssize_t gen_read_store(struct device *dev,
 	mipi_dsi_set_maximum_return_packet_size(dsi->slave, sysfs->input_param[1]);
 	if (sysfs->input_param[1] < sizeof(sysfs->read_buf) / 4) {
 		mipi_dsi_generic_read(dsi->slave, &sysfs->input_param[0], 1,
-				sysfs->read_buf, sysfs->input_param[1]);
+			sysfs->read_buf, sysfs->input_param[1]);
 	} else {
 		pr_err("%s() read data is overwrite read buf, input_param = %d\n",
 					__func__, sysfs->input_param[1]);
@@ -171,7 +183,6 @@ static ssize_t gen_read_show(struct device *dev,
 				"data[%d] = 0x%02x\n",
 				i, sysfs->read_buf[i]);
 	}
-
 	return ret;
 }
 static DEVICE_ATTR_RW(gen_read);
@@ -291,7 +302,6 @@ static ssize_t dcs_read_show(struct device *dev,
 				"data[%d] = 0x%02x\n",
 				i, sysfs->read_buf[i]);
 	}
-
 	return ret;
 }
 static DEVICE_ATTR_RW(dcs_read);
@@ -686,6 +696,7 @@ static struct attribute *dsi_attrs[] = {
 	&dev_attr_int0_mask.attr,
 	&dev_attr_int1_mask.attr,
 	&dev_attr_state_reset.attr,
+	&dev_attr_cali_dsi_suspend.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(dsi);

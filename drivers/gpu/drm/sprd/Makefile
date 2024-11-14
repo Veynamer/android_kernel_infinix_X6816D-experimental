@@ -2,12 +2,18 @@
 
 ccflags-y := -I $(srctree)/$(src)
 
+# sprd-drm-$(CONFIG_DRM_SPRD_OPPO_DISPLAY_PRIVATE_API) += oppo_display_private_api/
+ifeq ($(PRODUCT_NAME),ums9230_nico)
+KBUILD_CFLAGS += -DLCD_CONFIG_POWER_ESD_ON
+endif
 sprd-drm-y := \
 	sprd_drm.o \
 	sprd_gem.o \
 	sprd_crtc.o \
 	sprd_plane.o \
-	disp_lib.o
+	disp_lib.o \
+	oppo_display_private_api.o \
+	sprd_drm_notifier.o
 
 sprd-drm-$(CONFIG_TRUSTY_VIRTIO_IPC) += disp_trusty.o
 

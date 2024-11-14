@@ -7,7 +7,12 @@
 #include <asm/unaligned.h>
 
 #include "ufs.h"
+#include "unipro.h"
 #include "ufs-sysfs.h"
+
+#ifdef CONFIG_UFS_SPRD_UFSHEALTH
+#include "ufshcd-sprd-health.h"
+#endif
 
 #include <trace/hooks/ufshcd.h>
 
@@ -177,6 +182,22 @@ static ssize_t auto_hibern8_store(struct device *dev,
 	return count;
 }
 
+static ssize_t ufs_utrdl_addr_show(struct device *dev,
+                                 struct device_attribute *attr, char *buf)
+{
+
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	return snprintf(buf, PAGE_SIZE, "%lx\n", hba->utrdl_dma_addr);
+}
+
+static ssize_t ufs_ucdl_addr_show(struct device *dev,
+                                 struct device_attribute *attr, char *buf)
+{
+
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	return snprintf(buf, PAGE_SIZE, "%lx\n", hba->ucdl_dma_addr);
+}
+
 static DEVICE_ATTR_RW(rpm_lvl);
 static DEVICE_ATTR_RO(rpm_target_dev_state);
 static DEVICE_ATTR_RO(rpm_target_link_state);
@@ -184,6 +205,8 @@ static DEVICE_ATTR_RW(spm_lvl);
 static DEVICE_ATTR_RO(spm_target_dev_state);
 static DEVICE_ATTR_RO(spm_target_link_state);
 static DEVICE_ATTR_RW(auto_hibern8);
+static DEVICE_ATTR_RO(ufs_utrdl_addr);
+static DEVICE_ATTR_RO(ufs_ucdl_addr);
 
 static struct attribute *ufs_sysfs_ufshcd_attrs[] = {
 	&dev_attr_rpm_lvl.attr,
@@ -193,6 +216,8 @@ static struct attribute *ufs_sysfs_ufshcd_attrs[] = {
 	&dev_attr_spm_target_dev_state.attr,
 	&dev_attr_spm_target_link_state.attr,
 	&dev_attr_auto_hibern8.attr,
+	&dev_attr_ufs_utrdl_addr.attr,
+	&dev_attr_ufs_ucdl_addr.attr,
 	NULL
 };
 
@@ -748,6 +773,776 @@ static const struct attribute_group ufs_sysfs_attributes_group = {
 	.attrs = ufs_sysfs_attributes,
 };
 
+#ifdef CONFIG_UFS_SPRD_UFSHEALTH
+static ssize_t factory_bad_block_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_fbbc_show(0);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t reserved_block_num_slc_tlc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+
+	data = sprd_rb_num_show(4);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t rtbb_esf_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_rtbb_esf_show(12);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t rtbb_psf_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_rtbb_psf_show(16);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t rtbb_uecc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_rtbb_uecc_show(20);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t uecc_count_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_uecc_count_show(24);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t read_reclaim_slc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_read_reclaim_slc_show(36);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t read_reclaim_tlc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_read_reclaim_tlc_show(40);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t vdt_vccq_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_vdt_vccq_show(44);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t vdt_vcc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_vdt_vcc_show(48);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t sudden_power_off_recovery_success_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_sudden_power_off_recovery_success_show(56);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t sudden_power_off_recovery_fail_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_sudden_power_off_recovery_fail_show(60);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t min_ec_num_slc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_min_ec_num_slc_show(68);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t max_ec_num_slc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_max_ec_num_slc_show(72);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t ave_ec_num_slc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_ave_ec_num_slc_show(76);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t min_ec_num_tlc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_min_ec_num_tlc_show(80);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t max_ec_num_tlc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_max_ec_num_tlc_show(84);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t ave_ec_num_tlc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_ave_ec_num_tlc_show(88);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t cumulative_host_read_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_cumulative_host_read_show(92);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t cumulative_host_write_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_cumulative_host_write_show(96);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t cumulative_initialization_count_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_cumulative_initialization_count_show(100);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t waf_tatal_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_waf_total_show(104);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t history_min_nand_temp_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_history_min_nand_temp_show(144);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t history_max_nand_temp_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_history_max_nand_temp_show(148);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t slc_used_life_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_slc_used_life_show(152);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t tlc_used_life_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_tlc_used_life_show(156);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t ffu_success_cnt_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_ffu_success_cnt_show(160);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t ffu_fail_cnt_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_ffu_fail_cnt_show(164);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t spare_slc_block_num_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_spare_slc_block_num_show(176);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t spare_tlc_block_num_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_spare_tlc_block_num_show(180);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t max_temperature_counter_over_85c_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_max_temperature_counter_over_85c_show(448);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t max_temperature_counter_over_125c_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_max_temperature_counter_over_125c_show(452);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t rtbb_slc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_rtbb_slc_show(456);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t rtbb_tlc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	u32 data = 0;
+	int err = -1;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	data = sprd_rtbb_tlc_show(460);
+	return snprintf(buf, PAGE_SIZE, "0x%x\n", data);
+}
+
+static ssize_t health_data_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	int err = -1;
+	u32 data;
+	int i;
+	int count = 0;
+
+	err = ufs_get_health_report(hba);
+	if (err) {
+		dev_err(hba->dev, "%s: Failed getting ufs health report. err = %d.\n",
+			__func__, err);
+		return err;
+	}
+
+	count += snprintf(buf + count, PAGE_SIZE,
+			"All health report(4 byte size):\n");
+	for (i = 0; i < 1000; i = i + 4) {
+		data = sprd_health_data_show(i);
+		count += snprintf(buf + count, PAGE_SIZE, "%08x ", data);
+	}
+	count += snprintf(buf + count, PAGE_SIZE, "\n");
+
+	return count;
+}
+
+static DEVICE_ATTR(factory_bad_block, 0444, factory_bad_block_show, NULL);
+static DEVICE_ATTR(reserved_block_num_slc_tlc, 0444,
+		reserved_block_num_slc_tlc_show, NULL);
+static DEVICE_ATTR(rtbb_esf, 0444, rtbb_esf_show, NULL);
+static DEVICE_ATTR(rtbb_psf, 0444, rtbb_psf_show, NULL);
+static DEVICE_ATTR(rtbb_uecc, 0444, rtbb_uecc_show, NULL);
+static DEVICE_ATTR(uecc_count, 0444, uecc_count_show, NULL);
+static DEVICE_ATTR(read_reclaim_slc, 0444, read_reclaim_slc_show, NULL);
+static DEVICE_ATTR(read_reclaim_tlc, 0444, read_reclaim_tlc_show, NULL);
+static DEVICE_ATTR(vdt_vccq, 0444, vdt_vccq_show, NULL);
+static DEVICE_ATTR(vdt_vcc, 0444, vdt_vcc_show, NULL);
+static DEVICE_ATTR(sudden_power_off_recovery_success, 0444,
+		sudden_power_off_recovery_success_show, NULL);
+static DEVICE_ATTR(sudden_power_off_recovery_fail, 0444,
+		sudden_power_off_recovery_fail_show, NULL);
+static DEVICE_ATTR(min_ec_num_slc, 0444, min_ec_num_slc_show, NULL);
+static DEVICE_ATTR(max_ec_num_slc, 0444, max_ec_num_slc_show, NULL);
+static DEVICE_ATTR(ave_ec_num_slc, 0444, ave_ec_num_slc_show, NULL);
+static DEVICE_ATTR(min_ec_num_tlc, 0444, min_ec_num_tlc_show, NULL);
+static DEVICE_ATTR(max_ec_num_tlc, 0444, max_ec_num_tlc_show, NULL);
+static DEVICE_ATTR(ave_ec_num_tlc, 0444, ave_ec_num_tlc_show, NULL);
+static DEVICE_ATTR(cumulative_host_read, 0444, cumulative_host_read_show, NULL);
+static DEVICE_ATTR(cumulative_host_write, 0444, cumulative_host_write_show, NULL);
+static DEVICE_ATTR(cumulative_initialization_count, 0444,
+		cumulative_initialization_count_show, NULL);
+static DEVICE_ATTR(waf_tatal, 0444, waf_tatal_show, NULL);
+static DEVICE_ATTR(history_min_nand_temp, 0444, history_min_nand_temp_show, NULL);
+static DEVICE_ATTR(history_max_nand_temp, 0444, history_max_nand_temp_show, NULL);
+static DEVICE_ATTR(slc_used_life, 0444, slc_used_life_show, NULL);
+static DEVICE_ATTR(tlc_used_life, 0444, tlc_used_life_show, NULL);
+static DEVICE_ATTR(ffu_success_cnt, 0444, ffu_success_cnt_show, NULL);
+static DEVICE_ATTR(ffu_fail_cnt, 0444, ffu_fail_cnt_show, NULL);
+static DEVICE_ATTR(spare_slc_block_num, 0444, spare_slc_block_num_show, NULL);
+static DEVICE_ATTR(spare_tlc_block_num, 0444, spare_tlc_block_num_show, NULL);
+static DEVICE_ATTR(max_temperature_counter_over_85c, 0444,
+		max_temperature_counter_over_85c_show, NULL);
+static DEVICE_ATTR(max_temperature_counter_over_125c,
+		0444, max_temperature_counter_over_125c_show, NULL);
+static DEVICE_ATTR(rtbb_slc, 0444, rtbb_slc_show, NULL);
+static DEVICE_ATTR(rtbb_tlc, 0444, rtbb_tlc_show, NULL);
+static DEVICE_ATTR(health_data, 0444, health_data_show, NULL);
+
+static struct attribute *ufs_sysfs_health_report[] = {
+	&dev_attr_factory_bad_block.attr,
+	&dev_attr_reserved_block_num_slc_tlc.attr,
+	&dev_attr_rtbb_esf.attr,
+	&dev_attr_rtbb_psf.attr,
+	&dev_attr_rtbb_uecc.attr,
+	&dev_attr_uecc_count.attr,
+	&dev_attr_read_reclaim_slc.attr,
+	&dev_attr_read_reclaim_tlc.attr,
+	&dev_attr_vdt_vccq.attr,
+	&dev_attr_vdt_vcc.attr,
+	&dev_attr_sudden_power_off_recovery_success.attr,
+	&dev_attr_sudden_power_off_recovery_fail.attr,
+	&dev_attr_min_ec_num_slc.attr,
+	&dev_attr_max_ec_num_slc.attr,
+	&dev_attr_ave_ec_num_slc.attr,
+	&dev_attr_min_ec_num_tlc.attr,
+	&dev_attr_max_ec_num_tlc.attr,
+	&dev_attr_ave_ec_num_tlc.attr,
+	&dev_attr_cumulative_host_read.attr,
+	&dev_attr_cumulative_host_write.attr,
+	&dev_attr_cumulative_initialization_count.attr,
+	&dev_attr_waf_tatal.attr,
+	&dev_attr_history_min_nand_temp.attr,
+	&dev_attr_history_max_nand_temp.attr,
+	&dev_attr_slc_used_life.attr,
+	&dev_attr_tlc_used_life.attr,
+	&dev_attr_ffu_success_cnt.attr,
+	&dev_attr_ffu_fail_cnt.attr,
+	&dev_attr_spare_slc_block_num.attr,
+	&dev_attr_spare_tlc_block_num.attr,
+	&dev_attr_max_temperature_counter_over_85c.attr,
+	&dev_attr_max_temperature_counter_over_125c.attr,
+	&dev_attr_rtbb_slc.attr,
+	&dev_attr_rtbb_tlc.attr,
+	&dev_attr_health_data.attr,
+	NULL,
+};
+
+static const struct attribute_group ufs_sysfs_health_report_group = {
+	.name = "health_report",
+	.attrs = ufs_sysfs_health_report,
+};
+
+#endif
+
+#define UFS_DME_GET(_name, _attr_sel, _peer)					\
+static ssize_t _name##_show(struct device *dev,					\
+	   struct device_attribute *attr, char *buf)				\
+{										\
+	struct ufs_hba *hba = dev_get_drvdata(dev);				\
+	int ret;								\
+	u32 mib_val;								\
+	ret = ufshcd_dme_get_attr(hba, UIC_ARG_MIB(_attr_sel), &mib_val, _peer);\
+	if (ret)								\
+		return -EINVAL;							\
+										\
+	return sprintf(buf, "0x%08x\n", mib_val);				\
+}										\
+static DEVICE_ATTR_RO(_name)
+
+UFS_DME_GET(host_gear_tx, PA_TXGEAR, 0);
+UFS_DME_GET(host_gear_rx, PA_RXGEAR, 0);
+UFS_DME_GET(host_lanes_tx, PA_ACTIVETXDATALANES, 0);
+UFS_DME_GET(host_lanes_rx, PA_ACTIVERXDATALANES, 0);
+UFS_DME_GET(peer_gear_tx, PA_TXGEAR, 1);
+UFS_DME_GET(peer_gear_rx, PA_RXGEAR, 1);
+UFS_DME_GET(peer_lanes_tx, PA_ACTIVETXDATALANES, 1);
+UFS_DME_GET(peer_lanes_rx, PA_ACTIVERXDATALANES, 1);
+
+static struct attribute *ufs_sysfs_power_mode[] = {
+	&dev_attr_host_gear_tx.attr,
+	&dev_attr_host_gear_rx.attr,
+	&dev_attr_host_lanes_tx.attr,
+	&dev_attr_host_lanes_rx.attr,
+	&dev_attr_peer_gear_tx.attr,
+	&dev_attr_peer_gear_rx.attr,
+	&dev_attr_peer_lanes_tx.attr,
+	&dev_attr_peer_lanes_rx.attr,
+	NULL,
+};
+
+static const struct attribute_group ufs_sysfs_power_mode_group = {
+	.name = "pwr_modes",
+	.attrs = ufs_sysfs_power_mode,
+};
+
 static const struct attribute_group *ufs_sysfs_groups[] = {
 	&ufs_sysfs_default_group,
 	&ufs_sysfs_device_descriptor_group,
@@ -758,6 +1553,10 @@ static const struct attribute_group *ufs_sysfs_groups[] = {
 	&ufs_sysfs_string_descriptors_group,
 	&ufs_sysfs_flags_group,
 	&ufs_sysfs_attributes_group,
+	&ufs_sysfs_power_mode_group,
+#ifdef CONFIG_UFS_SPRD_UFSHEALTH
+	&ufs_sysfs_health_report_group,
+#endif
 	NULL,
 };
 

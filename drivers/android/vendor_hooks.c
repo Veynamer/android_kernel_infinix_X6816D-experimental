@@ -16,6 +16,7 @@
 #include <trace/hooks/futex.h>
 #include <trace/hooks/topology.h>
 #include <trace/hooks/debug.h>
+#include <trace/hooks/vh_vmscan.h>
 #include <trace/hooks/wqlockup.h>
 #include <trace/hooks/sysrqcrash.h>
 #include <trace/hooks/cgroup.h>
@@ -86,3 +87,11 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_psci_tos_resident_on);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_psci_cpu_suspend);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_regmap_update);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_ion_buffer_release);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_meminfo_proc_show);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mem_cgroup_id_remove);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_tune_scan_type);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_rmqueue);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mem_cgroup_css_offline);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mem_cgroup_css_online);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mem_cgroup_free);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mem_cgroup_alloc);

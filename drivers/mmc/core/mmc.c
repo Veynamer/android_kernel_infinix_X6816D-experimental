@@ -26,13 +26,6 @@
 #include "sd_ops.h"
 #include "pwrseq.h"
 
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 begin
-#ifdef CONFIG_MMC_WRITE_PROTECT
-#include "emmc_write_protect.h"
-unsigned int csd_wp_grp_size;
-#endif
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 end
-
 #define DEFAULT_CMD6_TIMEOUT_MS	500
 #define MIN_CACHE_EN_TIMEOUT_MS 1600
 
@@ -134,21 +127,6 @@ static void mmc_set_erase_size(struct mmc_card *card)
 	mmc_init_erase(card);
 }
 
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 begin
-#ifdef CONFIG_MMC_WRITE_PROTECT
-static void mmc_set_wp_grp_size(struct mmc_card *card)
-{
-    if (card->ext_csd.erase_group_def & 1) {
-        card->android_kabi_reserved1 = card->ext_csd.hc_erase_size *
-                card->ext_csd.raw_hc_erase_gap_size;
-    } else {
-        card->android_kabi_reserved1 = card->csd.erase_size *
-                (csd_wp_grp_size + 1);
-    }
-}
-#endif
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 end
-
 /*
  * Given a 128-bit response, decode to our card CSD structure.
  */
@@ -199,11 +177,6 @@ static int mmc_decode_csd(struct mmc_card *card)
 		b = UNSTUFF_BITS(resp, 37, 5);
 		csd->erase_size = (a + 1) * (b + 1);
 		csd->erase_size <<= csd->write_blkbits - 9;
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 begin
-#ifdef CONFIG_MMC_WRITE_PROTECT
-		csd_wp_grp_size = UNSTUFF_BITS(resp, 32, 5);
-#endif
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 end
 	}
 
 	return 0;
@@ -829,11 +802,6 @@ MMC_DEV_ATTR(rel_sectors, "%#x\n", card->ext_csd.rel_sectors);
 MMC_DEV_ATTR(ocr, "0x%08x\n", card->ocr);
 MMC_DEV_ATTR(rca, "0x%04x\n", card->rca);
 MMC_DEV_ATTR(cmdq_en, "%d\n", card->ext_csd.cmdq_en);
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 begin
-#ifdef CONFIG_MMC_WRITE_PROTECT
-MMC_DEV_ATTR(wp_grp_size, "%u\n", card->android_kabi_reserved1 << 9);
-#endif
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 end
 
 static ssize_t mmc_fwrev_show(struct device *dev,
 			      struct device_attribute *attr,
@@ -893,11 +861,6 @@ static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_rca.attr,
 	&dev_attr_dsr.attr,
 	&dev_attr_cmdq_en.attr,
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 begin
-#ifdef CONFIG_MMC_WRITE_PROTECT
-	&dev_attr_wp_grp_size.attr,
-#endif
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 end
 	NULL,
 };
 ATTRIBUTE_GROUPS(mmc_std);
@@ -1759,12 +1722,6 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 			mmc_set_erase_size(card);
 		}
 	}
-	
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 begin
-#ifdef CONFIG_MMC_WRITE_PROTECT
-    mmc_set_wp_grp_size(card);
-#endif
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 end
 
 	/*
 	 * Ensure eMMC user default partition is enabled
@@ -1805,15 +1762,6 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	else
 		card->erase_arg = MMC_ERASE_ARG;
 
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 begin
-#ifdef CONFIG_MMC_WRITE_PROTECT
-    /*
-     * Set write protect
-     */
-    err = set_power_on_write_protect(card);
-#endif
-//NVA-672 SSW-026 Modified for Power-on Write Protect Enablement Flag 2022-08-05 end
-
 	/*
 	 * Select timing interface
 	 */
@@ -1844,6 +1792,9 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	 */
 	mmc_select_powerclass(card);
 
+#ifdef CONFIG_MMC_SPRD_MMCHEALTH
+	mmc_health(card);
+#endif
 	/*
 	 * Enable HPI feature (if supported)
 	 */
