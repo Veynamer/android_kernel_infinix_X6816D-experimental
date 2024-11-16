@@ -1,0 +1,14 @@
+#
+# Novatek NT36xxx adaptive touchscreen driver configuration
+#
+config CONFIG_TOUCHSCREEN_ADAPTIVE_NT36XXX
+	tristate "Novatek NT36xxx adaptive driver"
+	help
+	  Say Y here if you have a Novatek NT36xxx touchscreen.
+
+	  If unsure, say N.
+config CONFIG_TOUCHSCREEN_ADAPTIVE_NT36XXX_SPI
+    tristate "Novatek NT36xxx adaptive spi driver"
+	help
+	  Say Y here if you have a Novatek NT36xxx touchscreen connected
+	  to your system by SPI.
