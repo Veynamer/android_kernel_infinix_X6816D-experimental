@@ -1392,4 +1392,13 @@ config TOUCHSCREEN_NT36xxx_HOSTDL_SPI
 
 	  If unsure, say N.
 
+source "drivers/input/touchscreen/adaptive_ts_transsion/Kconfig"
+
+config TOUCHSCREEN_ADAPTIVE_NT36XXX
+	tristate "Novatek NT36xxx adaptive driver"
+	help
+	  Say Y here if you have a Novatek NT36xxx touchscreen.
+
+	  If unsure, say N.
+
 endif
