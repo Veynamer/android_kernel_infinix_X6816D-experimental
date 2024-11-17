@@ -112,6 +112,7 @@ obj-$(CONFIG_TOUCHSCREEN_IQS5XX)	+= iqs5xx.o
 obj-$(CONFIG_TOUCHSCREEN_HIMAX_83112A)    += Himax/
 obj-$(CONFIG_TOUCHSCREEN_CTS)    += ICNL9911/
 obj-$(CONFIG_TOUCHSCREEN_NT36xxx_HOSTDL_SPI)    += nt36xxx/
+obj-$(CONFIG_TOUCHSCREEN_ADAPTIVE_NT36XXX)  += adaptive_ts_transsion/
 obj-$(CONFIG_TOUCHSCREEN_HIMAX_CHIPSET) += hxchipset/
 obj-$(CONFIG_TOUCHSCREEN_FTS_CHIPSET)    += focaltech_touch/
 obj-y   += tp_pannel_notifier.o
